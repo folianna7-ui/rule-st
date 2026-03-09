@@ -79,7 +79,10 @@
 .wrt-cat-btn:hover{color:#94a3b8;background:rgba(255,255,255,0.09)}
 
 /* ── Keywords pills ────────────────────────────────────────── */
+.wrt-kw-badge{font-size:9px;padding:1px 6px;border-radius:10px;background:rgba(192,132,252,0.12);border:1px solid rgba(192,132,252,0.2);color:#c084fc;cursor:pointer;white-space:nowrap;flex-shrink:0}
+.wrt-kw-badge:active{background:rgba(192,132,252,0.25)}
 .wrt-kw-pills{display:flex;gap:3px;flex-wrap:wrap;margin:0 4px}
+.wrt-kw-pills.wrt-kw-hidden{display:none}
 .wrt-kw-pill{font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(192,132,252,0.1);border:1px solid rgba(192,132,252,0.2);color:#c084fc;white-space:nowrap}
 
 /* ── Rule row ──────────────────────────────────────────────── */

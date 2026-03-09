@@ -14,6 +14,8 @@ let _cp={w:'',p:'',r:''},_pd=true;
 let _vs=null,_vc={},_va=new Set(),_vt=null,_vb=false;
 
 function ctx(){return SillyTavern.getContext();}
+function getHdrs(){try{const h=ctx().getRequestHeaders?.();if(h)return h;}catch(e){}return{'Content-Type':'application/json'};}
+
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
 function sH(s){let h=0;for(let i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i);h|=0;}return h.toString(36);}
@@ -42,7 +44,7 @@ function rChat(d){return(ctx().chat||[]).slice(-Math.max(d||5,3)).map(m=>m.mes||
 async function chkVec(){
   if(_vs!==null)return _vs;
   try{
-    const r=await fetch('/api/embeddings/compute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'test',source:'wrt'})});
+    const r=await fetch('/api/embeddings/compute',{method:'POST',headers:getHdrs(),body:JSON.stringify({text:'test',source:'wrt'})});
     if(r.ok){const d=await r.json();const v=d.embedding||d.vector;_vs=!!(v&&v.length>0);}
     else _vs=false;
   }catch(e){_vs=false;}
@@ -50,7 +52,7 @@ async function chkVec(){
 }
 async function getEmb(text){
   try{
-    const r=await fetch('/api/embeddings/compute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text.slice(0,500),source:'wrt'})});
+    const r=await fetch('/api/embeddings/compute',{method:'POST',headers:getHdrs(),body:JSON.stringify({text:text.slice(0,500),source:'wrt'})});
     if(!r.ok)return null;const d=await r.json();return d.embedding||d.vector||null;
   }catch(e){return null;}
 }
@@ -213,7 +215,7 @@ async function aiG(uPr,sP){
     {url:'/api/backends/chat-completions/generate',body:()=>({messages:[{role:'system',content:sP},{role:'user',content:uPr}],stream:false})},
     {url:'/api/generate',body:()=>({prompt:full,max_new_tokens:2000,stream:false})},
     {url:'/generate',body:()=>({prompt:full,max_new_tokens:2000,stream:false})}
-  ]){try{const r=await fetch(ep.url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ep.body())});if(!r.ok)continue;const t=exAi(await r.json());if(t?.trim())return t;}catch(e){}}
+  ]){try{const r=await fetch(ep.url,{method:'POST',headers:getHdrs(),body:JSON.stringify(ep.body())});if(!r.ok)continue;const t=exAi(await r.json());if(t?.trim())return t;}catch(e){}}
   throw new Error('\u041D\u0435\u0442 \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u044F');
 }
 function cCtx(d){return(ctx().chat||[]).slice(-d).map(m=>'['+(m.is_user?'U':'C')+']: '+(m.mes||'').slice(0,600)).join('\n\n');}
@@ -225,7 +227,7 @@ async function scW(d,wl){
   const l=wl?gLore():'';
   return pWR(await aiG(
     'CHAT:\n'+(cCtx(d)||'(empty)')+(l?'\n\nLORE:\n'+l.slice(0,4000):'')+(ex?'\n\nEXISTING:\n'+ex:'')+'\n\nExtract world rules:',
-    'Extract WORLD RULES. FORMAT:\n## Category\n- Rule (max 20 words)\nGroup by topic. ONLY permanent laws/mechanics. Preserve existing, ADD new. Same language as chat.'
+    'Extract WORLD RULES. FORMAT:\n## Category\n- Rule (max 20 words)\nGroup by topic. ONLY permanent laws/mechanics. Preserve existing, ADD new. ALWAYS write rules in ENGLISH regardless of chat language.'
   ),s);
 }
 function pWR(t,s){
@@ -244,16 +246,16 @@ async function scP(name,d,wl){
   const et=ex?ex.rules.map(r=>'- '+r.text).join('\n'):'';const l=wl?gLore():'';
   return pRL(await aiG(
     'CHAT:\n'+(cCtx(d)||'(empty)')+(l?'\n\nLORE:\n'+l.slice(0,4000):'')+(et?'\n\nEXISTING FOR '+name+':\n'+et:'')+'\n\nExtract personal rules for '+name+':',
-    'Extract PERSONAL RULES for "'+name+'". Rules=behavioral codes,limits,vows. Numbered list, max 25 words. Preserve existing, ADD new. Same language.'
+    'Extract PERSONAL RULES for "'+name+'". Rules=behavioral codes,limits,vows. Numbered list, max 25 words. Preserve existing, ADD new. ALWAYS write rules in ENGLISH regardless of chat language.'
   ));
 }
 
 async function scR(c1,c2,d,wl){
-  const s=gs();const ex=s.relationshipRules.find(p=>(p.char1===c1&&p.char2===c2)||(p.char1===c2&&p.char2===c1));
+  const s=gs();const ex=s.relationshipRules.find(p=>p.char1===c1&&p.char2===c2);
   const et=ex?ex.rules.map(r=>'- '+r.text).join('\n'):'';const l=wl?gLore():'';
   return pRL(await aiG(
     'CHAT:\n'+(cCtx(d)||'(empty)')+(l?'\n\nLORE:\n'+l.slice(0,4000):'')+(et?'\n\nEXISTING ('+c1+'\u2192'+c2+'):\n'+et:'')+'\n\nExtract relationship rules:',
-    'Extract RELATIONSHIP RULES between "'+c1+'" and "'+c2+'". Rules=pacts,dynamics,boundaries. Mark [OUTDATED] if contradicted. Numbered list, max 25 words. Same language.'
+    'Extract RELATIONSHIP RULES from "'+c1+'" TOWARD "'+c2+'". Focus on how '+c1+' relates to/treats/feels about '+c2+'. Rules=pacts,dynamics,boundaries,attitudes FROM '+c1+' perspective. Mark [OUTDATED] if contradicted. Numbered list, max 25 words. ALWAYS write rules in ENGLISH regardless of chat language.'
   ));
 }
 
@@ -271,7 +273,7 @@ function pRL(t){
 async function condR(rules,name){
   return pRL(await aiG(
     'Category: '+name+'\nRules:\n'+rules.map((r,i)=>(i+1)+'. '+r.text).join('\n')+'\n\nCondense:',
-    'Merge overlapping rules. Output MINIMUM set preserving ALL info. Max 25 words each. Numbered list. Same language.'
+    'Merge overlapping rules. Output MINIMUM set preserving ALL info. Max 25 words each. Numbered list. ALWAYS write in ENGLISH.'
   ));
 }
 
@@ -375,6 +377,11 @@ function oM(){
 function rT(){const $b=$('#wrt_tb');if(!$b.length)return;_uUI();if(activeTab==='world')$b.html(tW());else if(activeTab==='personal')$b.html(tP());else $b.html(tRe());bT();}
 
 // ---- Tab helpers ----
+function kwBadge(kws,catId){
+  if(!kws||!kws.length)return '';
+  return '<span class="wrt-kw-badge" data-action="show-kw" data-catid="'+catId+'">\uD83D\uDD11'+kws.length+'</span>'
+    +'<span class="wrt-kw-pills wrt-kw-hidden" id="wrt_kwp_'+catId+'">'+kws.map(k=>'<span class="wrt-kw-pill">'+esc(k)+'</span>').join('')+'</span>';
+}
 function sHr(){return '<div class="wrt-search-row"><input class="wrt-search-inp" id="wrt_sq" value="'+esc(_sq)+'" placeholder="\uD83D\uDD0D \u041F\u043E\u0438\u0441\u043A\u2026">'+(_sq?'<button class="wrt-search-clear" id="wrt_sqc">\u2715</button>':'')+'</div>';}
 function mSr(r){if(!_sq)return true;const q=_sq.toLowerCase();return(r.text||'').toLowerCase().includes(q)||(r.date||'').toLowerCase().includes(q);}
 function pBd(p){const c={0:'#4a5568',1:'#f59e0b',2:'#ef4444'};return '<span class="wrt-prio-badge" style="color:'+c[p||0]+'" title="'+PN[p||0]+'">'+PL[p||0]+'</span>';}
@@ -415,13 +422,14 @@ function tW(){
   else s.worldRules.forEach(cat=>{
     const co=!!_cc['w_'+cat.id],fl=cat.rules.filter(r=>mSr(r));if(_sq&&!fl.length)return;
     const act=wCA(cat,rt),en=cat.rules.filter(r=>r.enabled).length,tk=cTo(cat.rules.filter(r=>r.enabled),s.compactMode);
-    const kw=(cat.keywords||[]).length?'<span class="wrt-kw-pills">'+cat.keywords.map(k=>'<span class="wrt-kw-pill">'+esc(k)+'</span>').join('')+'</span>':'';
+    const kw=kwBadge(cat.keywords,cat.id);
     l+='<div class="wrt-cat-group'+(act?' wrt-cat-active':' wrt-cat-inactive')+'" data-catid="'+cat.id+'">'
       +'<div class="wrt-cat-hdr" data-section="world" data-catid="'+cat.id+'"><span class="wrt-cat-chev">'+(co?'\u25B8':'\u25BE')+'</span><span class="wrt-cat-name">'+esc(cat.name)+'</span>'+kw
       +'<span class="wrt-cat-count">'+en+'/'+cat.rules.length+'</span><span class="wrt-cat-tokens">~'+tk+'t</span>'
       +'<button class="wrt-cat-toggle'+(cat.enabled?' on':'')+'" data-action="toggle-cat" data-tab="world" data-catid="'+cat.id+'"></button>'
       +'<div class="wrt-cat-actions">'
       +'<button class="wrt-cat-btn" data-action="condense-cat" data-tab="world" data-catid="'+cat.id+'" title="AI \u043A\u043E\u043D\u0434\u0435\u043D\u0441\u0430\u0446\u0438\u044F">\u26A1</button>'
+      +'<button class="wrt-cat-btn" data-action="auto-kw" data-tab="world" data-catid="'+cat.id+'" title="\u0410\u0432\u0442\u043E-\u043A\u043B\u044E\u0447\u0438">\uD83E\uDD16</button>'
       +'<button class="wrt-cat-btn" data-action="edit-cat-kw" data-tab="world" data-catid="'+cat.id+'" title="\u041A\u043B\u044E\u0447\u0438">\uD83D\uDD11</button>'
       +'<button class="wrt-cat-btn" data-action="rename-cat" data-tab="world" data-catid="'+cat.id+'">\u270E</button>'
       +'<button class="wrt-cat-btn" data-action="del-cat" data-tab="world" data-catid="'+cat.id+'">\u2715</button>'
@@ -441,12 +449,13 @@ function tP(){
   else s.personalRules.forEach(ch=>{
     const co=!!_cc['p_'+ch.id],fl=ch.rules.filter(r=>mSr(r));if(_sq&&!fl.length)return;
     const act=pA(ch,rt),en=ch.rules.filter(r=>r.enabled).length,tk=cTo(ch.rules.filter(r=>r.enabled),s.compactMode);
-    const kw=(ch.keywords||[]).length?'<span class="wrt-kw-pills">'+ch.keywords.map(k=>'<span class="wrt-kw-pill">'+esc(k)+'</span>').join('')+'</span>':'';
+    const kw=kwBadge(ch.keywords,ch.id);
     l+='<div class="wrt-cat-group'+(act?' wrt-cat-active':' wrt-cat-inactive')+'" data-catid="'+ch.id+'">'
       +'<div class="wrt-cat-hdr" data-section="personal" data-catid="'+ch.id+'"><span class="wrt-cat-chev">'+(co?'\u25B8':'\u25BE')+'</span><span class="wrt-cat-name">'+esc(ch.name)+'</span>'+kw
       +'<span class="wrt-cat-count">'+en+'/'+ch.rules.length+'</span><span class="wrt-cat-tokens">~'+tk+'t</span>'
       +'<div class="wrt-cat-actions">'
       +'<button class="wrt-cat-btn" data-action="condense-cat" data-tab="personal" data-catid="'+ch.id+'">\u26A1</button>'
+      +'<button class="wrt-cat-btn" data-action="auto-kw" data-tab="personal" data-catid="'+ch.id+'" title="\u0410\u0432\u0442\u043E-\u043A\u043B\u044E\u0447\u0438">\uD83E\uDD16</button>'
       +'<button class="wrt-cat-btn" data-action="edit-char" data-tab="personal" data-catid="'+ch.id+'">\u2699</button>'
       +'<button class="wrt-cat-btn" data-action="del-cat" data-tab="personal" data-catid="'+ch.id+'">\u2715</button>'
       +'</div></div><div class="wrt-cat-body"'+(co?' style="display:none"':'')+'>';
@@ -505,7 +514,7 @@ function bT(){
   $('#wrt_awc').off('keydown').on('keydown',e=>{if(e.key==='Enter')$('#wrt_awcb').click();});
   $('#wrt_apb').off('click').on('click',()=>{const n=$('#wrt_apn').val().trim();if(!n)return;const s=gs();if(s.personalRules.some(c=>c.name.toLowerCase()===n.toLowerCase())){toast('\u0423\u0436\u0435 \u0435\u0441\u0442\u044C','#f59e0b');return;}s.personalRules.push({id:uid(),name:n,keywords:[n],rules:[]});sv();uMt();$('#wrt_apn').val('');cNames();rT();});
   $('#wrt_apn').off('keydown').on('keydown',e=>{if(e.key==='Enter')$('#wrt_apb').click();});
-  $('#wrt_arb').off('click').on('click',()=>{const c1=$('#wrt_ar1').val().trim(),c2=$('#wrt_ar2').val().trim();if(!c1||!c2){toast('\u041E\u0431\u0430 \u0438\u043C\u0435\u043D\u0438','#f59e0b');return;}if(c1.toLowerCase()===c2.toLowerCase()){toast('\u0420\u0430\u0437\u043D\u044B\u0435 \u0438\u043C\u0435\u043D\u0430','#f59e0b');return;}const s=gs();if(s.relationshipRules.some(p=>(p.char1.toLowerCase()===c1.toLowerCase()&&p.char2.toLowerCase()===c2.toLowerCase())||(p.char1.toLowerCase()===c2.toLowerCase()&&p.char2.toLowerCase()===c1.toLowerCase()))){toast('\u0423\u0436\u0435 \u0435\u0441\u0442\u044C','#f59e0b');return;}s.relationshipRules.push({id:uid(),char1:c1,char2:c2,keywords:[c1,c2],activationMode:'strict',rules:[]});sv();uMt();$('#wrt_ar1').val('');$('#wrt_ar2').val('');cNames();rT();});
+  $('#wrt_arb').off('click').on('click',()=>{const c1=$('#wrt_ar1').val().trim(),c2=$('#wrt_ar2').val().trim();if(!c1||!c2){toast('\u041E\u0431\u0430 \u0438\u043C\u0435\u043D\u0438','#f59e0b');return;}if(c1.toLowerCase()===c2.toLowerCase()){toast('\u0420\u0430\u0437\u043D\u044B\u0435 \u0438\u043C\u0435\u043D\u0430','#f59e0b');return;}const s=gs();if(s.relationshipRules.some(p=>p.char1.toLowerCase()===c1.toLowerCase()&&p.char2.toLowerCase()===c2.toLowerCase())){toast('\u0423\u0436\u0435 \u0435\u0441\u0442\u044C','#f59e0b');return;}s.relationshipRules.push({id:uid(),char1:c1,char2:c2,keywords:[c1,c2],activationMode:'strict',rules:[]});sv();uMt();$('#wrt_ar1').val('');$('#wrt_ar2').val('');cNames();rT();});
   $('#wrt_sb_world').off('click').on('click',async function(){await dS('world',$(this));});
   $('#wrt_sb_personal').off('click').on('click',async function(){await dS('personal',$(this));});
   $('#wrt_sb_relations').off('click').on('click',async function(){await dS('relations',$(this));});
@@ -560,6 +569,8 @@ function hA($el){
       if(tab!=='world'){$('[data-input="ad-'+tab+'-'+cid+'"]').val('');$('[data-input="an-'+tab+'-'+cid+'"]').val('');}
       rT();break;}
     case 'condense-cat':if(cat)dCo(cat,tab);break;
+    case 'show-kw':{const $p=$('#wrt_kwp_'+cid);$p.toggleClass('wrt-kw-hidden');break;}
+    case 'auto-kw':if(cat)autoKw(cat,tab);break;
   }
 }
 
@@ -575,6 +586,32 @@ async function dCo(cat,tab){
       const snap=JSON.stringify(cat.rules);cat.rules=[...cat.rules.filter(r=>!r.enabled),...cd];sv();uP();uMt();rT();
       toast('\u041A\u043E\u043D\u0434\u0435\u043D\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u043E','#a78bfa',()=>{cat.rules=JSON.parse(snap);sv();uP();uMt();rT();});
     }
+  }catch(e){toast('\u041E\u0448\u0438\u0431\u043A\u0430: '+e.message,'#f87171');}
+}
+
+// ---- Auto keywords ----
+async function autoKw(cat,tab){
+  const name=tab==='relations'?(cat.char1+', '+cat.char2):cat.name;
+  const ruleTexts=cat.rules.map(r=>r.text).join('; ');
+  toast('\u0413\u0435\u043D\u0435\u0440\u0438\u0440\u0443\u044E \u043A\u043B\u044E\u0447\u0438\u2026','#a78bfa',null,8000);
+  try{
+    const result=await aiG(
+      'Name: '+name+'\nRules: '+ruleTexts.slice(0,800)+'\n\nGenerate activation keywords:',
+      'Generate keyword list for a rule category. Keywords activate these rules when found in chat.\n\n'
+      +'OUTPUT: comma-separated list of 5-15 keywords.\n'
+      +'Include: the name itself, all grammatical forms (cases, declensions), related terms, synonyms.\n'
+      +'For Russian names generate ALL case forms: nom, gen, dat, acc, inst, prep.\n'
+      +'For topic categories (Magic, Politics) include related nouns, verbs, adjectives.\n'
+      +'ONLY output the comma-separated list, nothing else.\n'
+      +'Write keywords in the SAME LANGUAGE as the input.'
+    );
+    const kws=result.split(',').map(s=>s.trim().replace(/[."']/g,'')).filter(s=>s.length>=2&&s.length<40);
+    if(kws.length){
+      const merged=new Set([...(cat.keywords||[]),...kws]);
+      cat.keywords=[...merged];
+      sv();uP();rT();
+      toast('\uD83D\uDD11 +'+kws.length+' \u043A\u043B\u044E\u0447\u0435\u0439','#34d399');
+    }else toast('\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C','#f59e0b');
   }catch(e){toast('\u041E\u0448\u0438\u0431\u043A\u0430: '+e.message,'#f87171');}
 }
 
