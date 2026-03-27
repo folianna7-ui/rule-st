@@ -1,4 +1,4 @@
-/* World Rules Tracker v2.0 */
+/* World Rules Tracker v3.0 */
 
 /* ── Settings panel ─────────────────────────────────────────── */
 .wrt-block{margin:8px 0;border:1px solid rgba(255,255,255,0.06);border-radius:10px;overflow:hidden}
@@ -22,6 +22,11 @@
 .wrt-api-status{font-size:11px;margin-top:5px;min-height:14px}
 .wrt-prompt-dot{font-size:10px;flex-shrink:0;transition:color 0.3s;cursor:default;margin-left:2px}
 
+/* #16 Language toggle */
+.wrt-lang-btn{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:5px;color:#4a5568;font-size:11px;font-weight:700;padding:3px 10px;cursor:pointer;font-family:inherit;transition:all 0.15s}
+.wrt-lang-btn.active{background:rgba(192,132,252,0.2);border-color:rgba(192,132,252,0.4);color:#c084fc}
+.wrt-lang-btn:hover:not(.active){color:#94a3b8}
+
 /* ── Modal ──────────────────────────────────────────────────── */
 .wrt-modal{display:none;position:fixed;top:0;right:0;bottom:0;left:0;z-index:99999;background:rgba(0,0,0,0.55);align-items:flex-start;justify-content:center;padding-top:48px}
 .wrt-modal.wrt-mopen{display:flex}
@@ -34,6 +39,9 @@
 .wrt-modal-x{background:none;border:none;color:#4a5568;font-size:16px;cursor:pointer;padding:4px;line-height:1;font-family:inherit;flex-shrink:0;transition:color 0.15s;touch-action:manipulation}
 .wrt-modal-x:hover{color:#94a3b8}
 
+/* ── #13 Activation summary bar ────────────────────────────── */
+.wrt-act-summary{padding:5px 16px;font-size:11px;font-weight:600;border-bottom:1px solid rgba(255,255,255,0.04);flex-shrink:0;background:rgba(0,0,0,0.15)}
+
 /* ── Tabs ───────────────────────────────────────────────────── */
 .wrt-tabs{display:flex;border-bottom:1px solid rgba(255,255,255,0.06);flex-shrink:0}
 .wrt-tab{flex:1;padding:10px 8px;background:none;border:none;border-bottom:2px solid transparent;color:#4a5568;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:all 0.15s;white-space:nowrap;touch-action:manipulation}
@@ -45,7 +53,7 @@
 /* ── Tab body ───────────────────────────────────────────────── */
 .wrt-tab-body{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0}
 .wrt-list-wrap{flex:1;overflow-y:auto;min-height:0;-webkit-overflow-scrolling:touch}
-.wrt-list{padding:0}.wrt-empty{padding:32px 16px;text-align:center;color:#3d4a60;font-size:12px;line-height:1.6}
+.wrt-list{padding:0}.wrt-empty{padding:32px 16px;text-align:center;color:#3d4a60;font-size:12px;line-height:1.6;white-space:pre-line}
 
 /* ── Search ────────────────────────────────────────────────── */
 .wrt-search-row{display:flex;align-items:center;gap:6px;padding:6px 10px 5px;border-bottom:1px solid rgba(255,255,255,0.04);flex-shrink:0}
@@ -85,10 +93,16 @@
 .wrt-kw-pills.wrt-kw-hidden{display:none}
 .wrt-kw-pill{font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(192,132,252,0.1);border:1px solid rgba(192,132,252,0.2);color:#c084fc;white-space:nowrap}
 
-/* ── Rule row ──────────────────────────────────────────────── */
-.wrt-rule-row{display:flex;align-items:flex-start;gap:6px;padding:7px 12px 7px 28px;border-bottom:1px solid rgba(255,255,255,0.02);transition:background 0.1s}
+/* ── Rule row  (#10 drag, #8 conflict) ─────────────────────── */
+.wrt-rule-row{display:flex;align-items:flex-start;gap:6px;padding:7px 12px 7px 8px;border-bottom:1px solid rgba(255,255,255,0.02);transition:background 0.1s;cursor:default}
 .wrt-rule-row:hover{background:rgba(255,255,255,0.02)}
 .wrt-rule-row.disabled{opacity:0.4}
+.wrt-rule-row.wrt-dragging{opacity:0.4;background:rgba(192,132,252,0.06)}
+.wrt-rule-row.wrt-drag-over{border-top:2px solid #c084fc;background:rgba(192,132,252,0.06)}
+/* #10 drag grip */
+.wrt-drag-grip{color:#2d3748;font-size:13px;cursor:grab;flex-shrink:0;padding:2px 2px 0;user-select:none;transition:color 0.15s}
+.wrt-rule-row:hover .wrt-drag-grip{color:#4a5568}
+.wrt-drag-grip:active{cursor:grabbing}
 .wrt-rule-num{font-size:10px;color:#3d4a60;min-width:18px;padding-top:3px;flex-shrink:0}
 .wrt-rule-body{flex:1;min-width:0}
 .wrt-rule-text{font-size:12px;color:#c9d1e0;line-height:1.5;cursor:pointer;word-break:break-word}
@@ -96,6 +110,8 @@
 .wrt-rule-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:3px;font-size:10px;color:#4a5568}
 .wrt-rule-date{color:#a78bfa}.wrt-rule-reason{color:#64748b;font-style:italic}
 .wrt-rule-sticky{color:#fbbf24;font-weight:600}.wrt-rule-vec{color:#a78bfa;font-weight:600}
+/* #8 conflict badge */
+.wrt-rule-conflict{color:#f59e0b;font-weight:700;font-size:11px}
 .wrt-rule-acts{display:flex;gap:3px;flex-shrink:0;opacity:0;transition:opacity 0.15s}
 .wrt-rule-row:hover .wrt-rule-acts{opacity:1}
 .wrt-rule-btn{background:none;border:none;color:#4a5568;font-size:12px;cursor:pointer;padding:2px 4px;font-family:inherit;transition:color 0.15s;touch-action:manipulation}
@@ -127,7 +143,7 @@
 .wrt-add-btn:active{background:rgba(192,132,252,0.3)}
 .wrt-add-select{background:#0d1117;border:1px solid rgba(255,255,255,0.08);border-radius:6px;color:#c9d1e0;padding:7px 8px;font-size:12px;font-family:inherit;outline:none}
 
-/* ── Scan ──────────────────────────────────────────────────── */
+/* ── Scan  (#20 per-tab) ───────────────────────────────────── */
 .wrt-scan-row{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid rgba(255,255,255,0.04);flex-shrink:0;flex-wrap:wrap}
 .wrt-scan-lbl{font-size:11px;color:#4a5568}
 .wrt-scan-check{display:flex;align-items:center;gap:4px;font-size:11px;color:#64748b;cursor:pointer}
@@ -168,10 +184,11 @@
 /* ── Mobile ────────────────────────────────────────────────── */
 @media(max-width:600px){
   .wrt-modal{background:none;backdrop-filter:none;padding:0;align-items:flex-start;justify-content:stretch;top:48px;bottom:auto}
-  .wrt-modal-inner{border-radius:0 0 14px 14px;border-top:none;width:100%;max-width:100%;height:auto;max-height:calc(100vh - 48px - 56px);animation:none!important;transition:none!important}
+  .wrt-modal-inner{border-radius:0 0 14px 14px;border-top:none;width:100%;max-width:100%;height:auto;max-height:calc(100vh - 48px - 56px)}
   .wrt-drag-handle{display:none}
   .wrt-modal-hdr{flex-wrap:nowrap;gap:6px;padding:8px 10px}
   .wrt-modal-title{display:none}.wrt-modal-tokens{display:none}
   .wrt-modal-x{margin-left:auto;min-width:44px;min-height:44px;font-size:20px;display:flex;align-items:center;justify-content:center}
   .wrt-rule-acts{opacity:1}.wrt-add-row{flex-wrap:wrap}.wrt-foot-btn{min-height:44px}.wrt-tab{font-size:11px;padding:9px 6px}
+  .wrt-drag-grip{display:none}
 }

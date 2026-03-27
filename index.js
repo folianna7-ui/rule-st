@@ -1,695 +1,1705 @@
 /**
- * World Rules Tracker v2.0 — SillyTavern Extension
- * Vector activation, token budgets, priorities, compact mode, AI condensation
+ * World Rules Tracker v3.0 — SillyTavern Extension
+ * Full combined release (Part 1 engine + Part 2 UI)
+ *
+ * Improvements vs v2.0:
+ *  #1  Readable variable/function names throughout
+ *  #2  Modular structure with clear section headers
+ *  #8  Conflict detection between rules in the same category
+ *  #9  Full vector cache (no 5-per-cycle limit)
+ *  #10 Drag-and-drop rule reordering (HTML5 drag API)
+ *  #11 Rule edit history (createdAt, updatedAt, history[])
+ *  #13 Activation summary bar (live active-rule counts)
+ *  #15 Selective export modal (choose sections)
+ *  #16 i18n — RU / EN, stored in settings
+ *  #17 Improved token estimation (BPE-aware Cyrillic/Latin)
+ *  #20 Per-tab scan depth (world / personal / relations)
  */
 (() => {
 'use strict';
-const MK='world_rules_tracker';
-const PI={N:0,I:1,C:2};
-const PL={0:'\u26AA',1:'\uD83D\uDFE1',2:'\uD83D\uDD34'};
-const PN={0:'\u041E\u0431\u044B\u0447\u043D\u044B\u0439',1:'\u0412\u0430\u0436\u043D\u044B\u0439',2:'\u041A\u0440\u0438\u0442\u0438\u0447\u0435\u0441\u043A\u0438\u0439'};
 
-let activeTab='world',_cc={},_pa=false,_kn=new Set(),_sq='';
-let _cp={w:'',p:'',r:''},_pd=true;
-let _vs=null,_vc={},_va=new Set(),_vt=null,_vb=false;
+// ══════════════════════════════════════════════════════════════════
+// § 1 · CONSTANTS
+// ══════════════════════════════════════════════════════════════════
 
-function ctx(){return SillyTavern.getContext();}
-function getHdrs(){try{const h=ctx().getRequestHeaders?.();if(h)return h;}catch(e){}return{'Content-Type':'application/json'};}
+const STORAGE_KEY = 'world_rules_tracker';
+const PRIORITY    = { NORMAL:0, IMPORTANT:1, CRITICAL:2 };
+const PRIO_ICON   = { 0:'⚪', 1:'🟡', 2:'🔴' };
 
-function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
-function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
-function sH(s){let h=0;for(let i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i);h|=0;}return h.toString(36);}
+// ══════════════════════════════════════════════════════════════════
+// § 2 · i18n  (#16)
+// ══════════════════════════════════════════════════════════════════
 
-// Russian morphology
-function ruS(w){
-  if(!w)return '';w=w.toLowerCase().trim();
-  for(const s of['\u0430\u043C\u0438','\u044F\u043C\u0438','\u043E\u0433\u043E','\u0435\u0433\u043E','\u043E\u043C\u0443','\u0435\u043C\u0443','\u044B\u043C\u0438','\u0438\u043C\u0438','\u0430\u0445','\u044F\u0445','\u043E\u0432','\u0435\u0432','\u0435\u0439','\u0438\u0439','\u043E\u0439','\u0443\u044E','\u044E\u044E','\u043E\u043C','\u0435\u043C','\u0451\u043C','\u0430\u043C','\u044F\u043C','\u044B\u043C','\u0438\u043C','\u0430','\u044F','\u0443','\u044E','\u0435','\u0451','\u0438','\u044B','\u043E']){
-    if(w.length>s.length+2&&w.endsWith(s))return w.slice(0,-s.length);
+const I18N = {
+  ru: {
+    enabled:'Включено', compact:'Компактный промпт (~40%)', injectDates:'Даты/причины в промпте',
+    semanticAct:'🧠 Семантическая активация', injDepth:'Глубина инъекции',
+    tokenBudget:'Бюджет токенов (0=∞)', kwDepth:'🔍 Ключи', msgs:'сообщ.',
+    openBtn:'📜 Открыть правила', apiSec:'🔌 API', lang:'Язык', noData:'нет данных',
+    vecThreshold:'🧠 Порог', scanDepthLbl:'Глубина скана (сообщ.)',
+    worldTab:'🌍 Мир', personalTab:'👤 Личные', relTab:'💞 Отношения',
+    exportBtn:'💾 Экспорт', importBtn:'📥 Импорт', clearBtn:'🗑', closeBtn:'Закрыть',
+    save:'💾 Сохранить', cancel:'Отмена', nameLabel:'Название', kwLabel:'Ключи (через запятую)',
+    alwaysActive:'Пусто = всегда активна', charName:'Имя', kwForms:'Формы имени для активации',
+    ruleText:'Текст правила', dateLabel:'Дата (опц.)', reasonLabel:'Причина (опц.)',
+    prioLabel:'Приоритет', stickyLabel:'📌 Sticky — всегда в контексте', editTitle:'Редактирование',
+    saved:'Сохранено', deleted:'Удалено', cleared:'Очищено',
+    exported:'Экспортировано', imported:'Импортировано', importErr:'Ошибка формата',
+    apiOk:'✅ API OK', vecOk:'✅ Vector OK', vecNA:'✗ Vector N/A',
+    vecOn:'Семантика вкл', vecOff:'Vector недоступен',
+    condensing:'Конденсирую…', condensed:'Конденсировано', condenseFail:'Не удалось', condenseMin:'Мин. 3 правила',
+    genKw:'Генерирую ключи…', kwFail:'Не удалось',
+    scanning:'Анализирую…', worldUpd:'Мир обновлён', nothingNew:'Ничего нового',
+    alreadyExists:'Уже есть', bothNames:'Оба имени', diffNames:'Разные имена',
+    selectTarget:'Выберите', errNoConn:'Нет подключения',
+    softMode:'мягкий', strictMode:'строгий', rulePh:'Правило…',
+    searchPh:'🔍 Поиск…', scanBtn:'✦ Скан', lorebook:'лорбук',
+    newCatPh:'Новая категория…', addCat:'+ Категория', addChar:'+ Персонаж', addPair:'+ Пара',
+    whoLabel:'Кто…', toWhomLabel:'К кому…',
+    activeSummary:(w,p,r)=>`Активно: 🌍${w} · 👤${p} · 💞${r}`,
+    noActiveRules:'Нет активных правил', promptOff:'○ выкл',
+    noWorld:'Правил мира нет.\nДобавьте категорию или ✦ Скан',
+    noPersonal:'Личных правил нет', noRelations:'Правил отношений нет',
+    conflictTip:'⚠ Возможный конфликт с другим правилом в этой категории',
+    histTitle:'📋 История изменений', histEmpty:'Изменений не было',
+    histCreated:'Создано', histEdited:'Изменено',
+    exportTitle:'Экспорт — выберите разделы',
+    exportWorld:'🌍 Правила мира', exportPersonal:'👤 Личные правила',
+    exportRelations:'💞 Отношения', exportSettings:'⚙️ Настройки',
+    doExport:'Экспортировать',
+    pN0:'Обычный', pN1:'Важный', pN2:'Критический',
+    confirmDel:'Удалить?', confirmClear:'Очистить ВСЕ правила?',
+    dragHandle:'≡',
+  },
+  en: {
+    enabled:'Enabled', compact:'Compact prompt (~40%)', injectDates:'Dates/reasons in prompt',
+    semanticAct:'🧠 Semantic activation', injDepth:'Injection depth',
+    tokenBudget:'Token budget (0=∞)', kwDepth:'🔍 Keywords', msgs:'msgs',
+    openBtn:'📜 Open rules', apiSec:'🔌 API', lang:'Language', noData:'no data',
+    vecThreshold:'🧠 Threshold', scanDepthLbl:'Scan depth (messages)',
+    worldTab:'🌍 World', personalTab:'👤 Personal', relTab:'💞 Relations',
+    exportBtn:'💾 Export', importBtn:'📥 Import', clearBtn:'🗑', closeBtn:'Close',
+    save:'💾 Save', cancel:'Cancel', nameLabel:'Name', kwLabel:'Keywords (comma-separated)',
+    alwaysActive:'Empty = always active', charName:'Name', kwForms:'Name forms for activation',
+    ruleText:'Rule text', dateLabel:'Date (opt.)', reasonLabel:'Reason (opt.)',
+    prioLabel:'Priority', stickyLabel:'📌 Sticky — always in context', editTitle:'Edit',
+    saved:'Saved', deleted:'Deleted', cleared:'Cleared',
+    exported:'Exported', imported:'Imported', importErr:'Format error',
+    apiOk:'✅ API OK', vecOk:'✅ Vector OK', vecNA:'✗ Vector N/A',
+    vecOn:'Semantics on', vecOff:'Vector unavailable',
+    condensing:'Condensing…', condensed:'Condensed', condenseFail:'Failed', condenseMin:'Min 3 rules',
+    genKw:'Generating keywords…', kwFail:'Failed',
+    scanning:'Scanning…', worldUpd:'World updated', nothingNew:'Nothing new',
+    alreadyExists:'Already exists', bothNames:'Both names', diffNames:'Different names',
+    selectTarget:'Select', errNoConn:'No connection',
+    softMode:'soft', strictMode:'strict', rulePh:'Rule…',
+    searchPh:'🔍 Search…', scanBtn:'✦ Scan', lorebook:'lorebook',
+    newCatPh:'New category…', addCat:'+ Category', addChar:'+ Character', addPair:'+ Pair',
+    whoLabel:'Who…', toWhomLabel:'To whom…',
+    activeSummary:(w,p,r)=>`Active: 🌍${w} · 👤${p} · 💞${r}`,
+    noActiveRules:'No active rules', promptOff:'○ off',
+    noWorld:'No world rules.\nAdd a category or ✦ Scan',
+    noPersonal:'No personal rules', noRelations:'No relationship rules',
+    conflictTip:'⚠ Possible conflict with another rule in this category',
+    histTitle:'📋 Edit history', histEmpty:'No edits yet',
+    histCreated:'Created', histEdited:'Edited',
+    exportTitle:'Export — select sections',
+    exportWorld:'🌍 World rules', exportPersonal:'👤 Personal rules',
+    exportRelations:'💞 Relations', exportSettings:'⚙️ Settings',
+    doExport:'Export',
+    pN0:'Normal', pN1:'Important', pN2:'Critical',
+    confirmDel:'Delete?', confirmClear:'Clear ALL rules?',
+    dragHandle:'≡',
   }
-  return w;
+};
+
+let currentLang = 'ru';
+function tr(key)          { return I18N[currentLang]?.[key] ?? I18N.ru[key] ?? key; }
+function trf(key,...args) { const v=tr(key); return typeof v==='function'?v(...args):v; }
+function prioName(p)      { return tr('pN'+(p||0)); }
+
+// ══════════════════════════════════════════════════════════════════
+// § 3 · STATE  (#1 readable names)
+// ══════════════════════════════════════════════════════════════════
+
+let activeTab         = 'world';
+let collapsedCats     = {};
+let promptIsActive    = false;
+let knownNames        = new Set();
+let searchQuery       = '';
+let currentPrompts    = {w:'',p:'',r:''};
+let promptDirty       = true;
+
+let vectorsAvailable  = null;
+let vectorCache       = {};
+let vectorActivated   = new Set();
+let vectorTimer       = null;
+let vectorBusy        = false;
+
+// Drag state (#10)
+let dragSrcRuleId = null;
+let dragSrcCatId  = null;
+let dragSrcTab    = null;
+
+// ══════════════════════════════════════════════════════════════════
+// § 4 · UTILITIES
+// ══════════════════════════════════════════════════════════════════
+
+function getCtx()   { return SillyTavern.getContext(); }
+
+function getHeaders() {
+  try { const h=getCtx().getRequestHeaders?.(); if(h)return h; } catch(e){}
+  return {'Content-Type':'application/json'};
 }
-function km(kw,text){
+
+function escHtml(s) {
+  return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function genId() { return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+
+function hashText(s) {
+  let h=0;
+  for(let i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i);h|=0;}
+  return h.toString(36);
+}
+
+function nowLabel() {
+  return new Date().toLocaleString(currentLang==='en'?'en-US':'ru-RU',
+    {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 5 · RUSSIAN MORPHOLOGY & KEYWORD MATCHING
+// ══════════════════════════════════════════════════════════════════
+
+function ruStem(word) {
+  if(!word)return '';
+  word=word.toLowerCase().trim();
+  const sfx=['амии','ями','ого','его','ому','ему','ыми','ими','ах','ях','ов','ев',
+    'ей','ий','ой','ую','юю','ом','ем','ём','ам','ям','ым','им','а','я','у','ю','е','ё','и','ы','о'];
+  for(const s of sfx){ if(word.length>s.length+2&&word.endsWith(s)) return word.slice(0,-s.length); }
+  return word;
+}
+
+function keywordMatch(kw,text) {
   if(!kw||!text)return false;
-  const kl=kw.toLowerCase(),ks=ruS(kw);
-  for(const w of text.toLowerCase().split(/[\s,.!?;:()\[\]{}"'\u00AB\u00BB\u2014\u2013\-\/\\]+/)){
-    if(w===kl)return true;
-    if(ks.length>=3&&ruS(w)===ks)return true;
+  const kl=kw.toLowerCase(), ks=ruStem(kw);
+  for(const tok of text.toLowerCase().split(/[\s,.!?;:()\[\]{}"'«»—–\-\/\\]+/)){
+    if(tok===kl)return true;
+    if(ks.length>=3&&ruStem(tok)===ks)return true;
   }
   return false;
 }
-function akm(kws,text){if(!kws||!kws.length)return false;for(const k of kws)if(km(k,text))return true;return false;}
-function rChat(d){return(ctx().chat||[]).slice(-Math.max(d||5,3)).map(m=>m.mes||'').join(' ');}
 
-// ---- Vector support ----
-async function chkVec(){
-  if(_vs!==null)return _vs;
-  try{
-    const r=await fetch('/api/embeddings/compute',{method:'POST',headers:getHdrs(),body:JSON.stringify({text:'test',source:'wrt'})});
-    if(r.ok){const d=await r.json();const v=d.embedding||d.vector;_vs=!!(v&&v.length>0);}
-    else _vs=false;
-  }catch(e){_vs=false;}
-  console.log('[WRT] Vec:',_vs);return _vs;
+function anyKeywordMatch(keywords,text) {
+  if(!keywords||!keywords.length)return false;
+  for(const k of keywords)if(keywordMatch(k,text))return true;
+  return false;
 }
-async function getEmb(text){
-  try{
-    const r=await fetch('/api/embeddings/compute',{method:'POST',headers:getHdrs(),body:JSON.stringify({text:text.slice(0,500),source:'wrt'})});
-    if(!r.ok)return null;const d=await r.json();return d.embedding||d.vector||null;
+
+function recentChatText(depth) {
+  return (getCtx().chat||[]).slice(-Math.max(depth||5,3)).map(m=>m.mes||'').join(' ');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 6 · VECTORS  (#9 — full cache, no 5-per-cycle limit)
+// ══════════════════════════════════════════════════════════════════
+
+async function checkVectors() {
+  if(vectorsAvailable!==null)return vectorsAvailable;
+  try {
+    const r=await fetch('/api/embeddings/compute',{method:'POST',headers:getHeaders(),body:JSON.stringify({text:'test',source:'wrt'})});
+    if(r.ok){const d=await r.json();const v=d.embedding||d.vector;vectorsAvailable=!!(v&&v.length>0);}
+    else vectorsAvailable=false;
+  }catch(e){vectorsAvailable=false;}
+  console.log('[WRT] vectors:',vectorsAvailable);
+  return vectorsAvailable;
+}
+
+async function getEmbedding(text) {
+  try {
+    const r=await fetch('/api/embeddings/compute',{method:'POST',headers:getHeaders(),body:JSON.stringify({text:text.slice(0,500),source:'wrt'})});
+    if(!r.ok)return null;
+    const d=await r.json();return d.embedding||d.vector||null;
   }catch(e){return null;}
 }
-function cos(a,b){
+
+function cosineSimilarity(a,b) {
   if(!a||!b||a.length!==b.length)return 0;
-  let d=0,na=0,nb=0;
-  for(let i=0;i<a.length;i++){d+=a[i]*b[i];na+=a[i]*a[i];nb+=b[i]*b[i];}
-  return na&&nb?d/(Math.sqrt(na)*Math.sqrt(nb)):0;
+  let dot=0,na=0,nb=0;
+  for(let i=0;i<a.length;i++){dot+=a[i]*b[i];na+=a[i]*a[i];nb+=b[i]*b[i];}
+  return(na&&nb)?dot/(Math.sqrt(na)*Math.sqrt(nb)):0;
 }
-async function cacheVec(id,text){const h=sH(text);if(_vc[id]&&_vc[id].hash===h)return;const v=await getEmb(text);if(v)_vc[id]={hash:h,vec:v};}
 
-async function procVec(){
-  const s=gs();if(!s.useVectors||!_vs||_vb)return;_vb=true;
-  try{
-    const text=rChat(s.keywordDepth||5);if(!text.trim()){_vb=false;return;}
-    const cv=await getEmb(text.slice(-1500));if(!cv){_vb=false;return;}
-    const th=s.vectorThreshold||0.55;const act=new Set();const all=[];
-    s.worldRules.forEach(c=>c.rules.forEach(r=>{if(r.enabled)all.push({id:r.id,text:r.text,cid:c.id});}));
-    s.personalRules.forEach(c=>c.rules.forEach(r=>{if(r.enabled)all.push({id:r.id,text:r.text,cid:c.id});}));
-    s.relationshipRules.forEach(p=>p.rules.forEach(r=>{if(r.enabled)all.push({id:r.id,text:r.text,cid:p.id});}));
-    let cached=0;
-    for(const r of all){
-      const h=sH(r.text);
-      if(!_vc[r.id]||_vc[r.id].hash!==h){if(cached<5){await cacheVec(r.id,r.text);cached++;}continue;}
-      if(cos(cv,_vc[r.id].vec)>=th){act.add(r.id);act.add('c_'+r.cid);}
+async function ensureVectorCached(id,text) {
+  const hash=hashText(text);
+  if(vectorCache[id]&&vectorCache[id].hash===hash)return;
+  const vec=await getEmbedding(text);
+  if(vec)vectorCache[id]={hash,vec};
+}
+
+async function processVectors() {
+  const s=getSettings();
+  if(!s.useVectors||!vectorsAvailable||vectorBusy)return;
+  vectorBusy=true;
+  try {
+    const text=recentChatText(s.keywordDepth||5);
+    if(!text.trim()){vectorBusy=false;return;}
+    const ctxVec=await getEmbedding(text.slice(-1500));
+    if(!ctxVec){vectorBusy=false;return;}
+
+    const allRules=[];
+    s.worldRules.forEach(cat=>cat.rules.forEach(r=>{if(r.enabled)allRules.push({id:r.id,text:r.text,catId:cat.id});}));
+    s.personalRules.forEach(cat=>cat.rules.forEach(r=>{if(r.enabled)allRules.push({id:r.id,text:r.text,catId:cat.id});}));
+    s.relationshipRules.forEach(pair=>pair.rules.forEach(r=>{if(r.enabled)allRules.push({id:r.id,text:r.text,catId:pair.id});}));
+
+    // FIX #9: cache ALL rules — no arbitrary limit
+    for(const rule of allRules) await ensureVectorCached(rule.id,rule.text);
+
+    const threshold=s.vectorThreshold||0.55;
+    const activated=new Set();
+    for(const rule of allRules){
+      if(vectorCache[rule.id]&&cosineSimilarity(ctxVec,vectorCache[rule.id].vec)>=threshold){
+        activated.add(rule.id);
+        activated.add('c_'+rule.catId);
+      }
     }
-    const changed=act.size!==_va.size||[...act].some(id=>!_va.has(id));
-    _va=act;
-    if(changed){_pd=true;await uP();if(_imo())rT();}
-  }catch(e){console.warn('[WRT] vec:',e);}
-  _vb=false;
-}
-function schVec(){clearTimeout(_vt);_vt=setTimeout(()=>procVec(),1500);}
-
-// ---- Names ----
-function cNames(){
-  const s=gs(),n=new Set();
-  s.personalRules.forEach(c=>{if(c.name)n.add(c.name);(c.keywords||[]).forEach(k=>n.add(k));});
-  s.relationshipRules.forEach(p=>{if(p.char1)n.add(p.char1);if(p.char2)n.add(p.char2);});
-  try{ctx().characters&&ctx().characters.forEach(c=>{if(c.name)n.add(c.name);});}catch(e){}
-  _kn=n;return n;
+    const changed=activated.size!==vectorActivated.size||[...activated].some(id=>!vectorActivated.has(id));
+    vectorActivated=activated;
+    if(changed){promptDirty=true;await updatePrompts();if(isModalOpen())renderTab();}
+  }catch(e){console.warn('[WRT] vec error:',e);}
+  vectorBusy=false;
 }
 
-// ---- Storage ----
-function df(){return{enabled:true,worldRules:[],personalRules:[],relationshipRules:[],depthWorld:0,depthPersonal:1,depthRelations:2,scanDepth:50,keywordDepth:5,scanWithLorebook:false,tokenBudgetWorld:0,tokenBudgetPersonal:0,tokenBudgetRelations:0,compactMode:false,injectDates:false,useVectors:false,vectorThreshold:0.55};}
-function _pc(){try{const c=ctx();return!!(c.chat_metadata&&typeof c.saveMetadata==='function');}catch(e){return false;}}
-function gs(){
-  const c=ctx();let s;
-  if(_pc()){if(!c.chat_metadata[MK])c.chat_metadata[MK]=df();s=c.chat_metadata[MK];}
-  else{if(!c.extensionSettings[MK])c.extensionSettings[MK]=df();s=c.extensionSettings[MK];}
-  const d=df();for(const k in d)if(s[k]===undefined)s[k]=d[k];
-  if(!Array.isArray(s.worldRules))s.worldRules=[];
-  if(!Array.isArray(s.personalRules))s.personalRules=[];
-  if(!Array.isArray(s.relationshipRules))s.relationshipRules=[];
-  s.worldRules.forEach(c=>{if(!Array.isArray(c.rules))c.rules=[];if(!Array.isArray(c.keywords))c.keywords=[];if(c.enabled===undefined)c.enabled=true;c.rules.forEach(r=>{if(r.enabled===undefined)r.enabled=true;if(r.sticky===undefined)r.sticky=false;if(r.priority===undefined)r.priority=0;});});
-  s.personalRules.forEach(c=>{if(!Array.isArray(c.rules))c.rules=[];if(!Array.isArray(c.keywords))c.keywords=[];c.rules.forEach(r=>{if(r.enabled===undefined)r.enabled=true;if(r.priority===undefined)r.priority=0;});});
-  s.relationshipRules.forEach(p=>{if(!Array.isArray(p.rules))p.rules=[];if(!Array.isArray(p.keywords))p.keywords=[];if(p.activationMode===undefined)p.activationMode='strict';p.rules.forEach(r=>{if(r.enabled===undefined)r.enabled=true;if(r.priority===undefined)r.priority=0;});});
+function scheduleVectors(){clearTimeout(vectorTimer);vectorTimer=setTimeout(()=>processVectors(),1500);}
+
+// ══════════════════════════════════════════════════════════════════
+// § 7 · KNOWN NAMES
+// ══════════════════════════════════════════════════════════════════
+
+function collectNames(){
+  const s=getSettings(),names=new Set();
+  s.personalRules.forEach(c=>{if(c.name)names.add(c.name);(c.keywords||[]).forEach(k=>names.add(k));});
+  s.relationshipRules.forEach(p=>{if(p.char1)names.add(p.char1);if(p.char2)names.add(p.char2);});
+  try{getCtx().characters?.forEach(c=>{if(c.name)names.add(c.name);});}catch(e){}
+  knownNames=names;return names;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 8 · STORAGE & SETTINGS  (#11 history, #16 lang, #20 per-tab depths)
+// ══════════════════════════════════════════════════════════════════
+
+function defaultSettings(){
+  return{
+    enabled:true, lang:'ru',
+    worldRules:[], personalRules:[], relationshipRules:[],
+    depthWorld:0, depthPersonal:1, depthRelations:2,
+    keywordDepth:5,
+    // #20 per-tab scan depths
+    scanDepthWorld:50, scanDepthPersonal:50, scanDepthRelations:50,
+    scanWithLorebook:false,
+    tokenBudgetWorld:0, tokenBudgetPersonal:0, tokenBudgetRelations:0,
+    compactMode:false, injectDates:false, useVectors:false, vectorThreshold:0.55,
+  };
+}
+
+function hasChatCtx(){
+  try{const c=getCtx();return!!(c.chat_metadata&&typeof c.saveMetadata==='function');}
+  catch(e){return false;}
+}
+
+// #11: stamp history fields on every rule
+function normalizeRule(rule){
+  if(rule.enabled===undefined) rule.enabled=true;
+  if(rule.priority===undefined) rule.priority=0;
+  if(!rule.createdAt) rule.createdAt=nowLabel();
+  if(!Array.isArray(rule.history)) rule.history=[];
+}
+
+function getSettings(){
+  const ctx=getCtx(); let s;
+  if(hasChatCtx()){
+    if(!ctx.chat_metadata[STORAGE_KEY]) ctx.chat_metadata[STORAGE_KEY]=defaultSettings();
+    s=ctx.chat_metadata[STORAGE_KEY];
+  }else{
+    if(!ctx.extensionSettings[STORAGE_KEY]) ctx.extensionSettings[STORAGE_KEY]=defaultSettings();
+    s=ctx.extensionSettings[STORAGE_KEY];
+  }
+  const d=defaultSettings();
+  for(const k in d) if(s[k]===undefined) s[k]=d[k];
+
+  // #20 migrate old flat scanDepth
+  if(s.scanDepth!==undefined){
+    if(s.scanDepthWorld===undefined)    s.scanDepthWorld    =s.scanDepth;
+    if(s.scanDepthPersonal===undefined) s.scanDepthPersonal =s.scanDepth;
+    if(s.scanDepthRelations===undefined)s.scanDepthRelations=s.scanDepth;
+    delete s.scanDepth;
+  }
+
+  if(!Array.isArray(s.worldRules))        s.worldRules=[];
+  if(!Array.isArray(s.personalRules))     s.personalRules=[];
+  if(!Array.isArray(s.relationshipRules)) s.relationshipRules=[];
+
+  s.worldRules.forEach(cat=>{
+    if(!Array.isArray(cat.rules))    cat.rules=[];
+    if(!Array.isArray(cat.keywords)) cat.keywords=[];
+    if(cat.enabled===undefined)      cat.enabled=true;
+    cat.rules.forEach(r=>{normalizeRule(r);if(r.sticky===undefined)r.sticky=false;});
+  });
+  s.personalRules.forEach(cat=>{
+    if(!Array.isArray(cat.rules))    cat.rules=[];
+    if(!Array.isArray(cat.keywords)) cat.keywords=[];
+    cat.rules.forEach(normalizeRule);
+  });
+  s.relationshipRules.forEach(pair=>{
+    if(!Array.isArray(pair.rules))    pair.rules=[];
+    if(!Array.isArray(pair.keywords)) pair.keywords=[];
+    if(pair.activationMode===undefined) pair.activationMode='strict';
+    pair.rules.forEach(normalizeRule);
+  });
+
+  if(s.lang) currentLang=s.lang;
   return s;
 }
-function sv(){_pd=true;const c=ctx();try{if(_pc())c.saveMetadata();else if(typeof c.saveSettingsDebounced==='function')c.saveSettingsDebounced();}catch(e){}}
 
-// ---- Token ----
-function tE(t){if(!t)return 0;const c=(t.match(/[\u0400-\u04FF]/g)||[]).length;return Math.ceil((t.length-c)/4+c/2);}
-function aB(rules,bud,fn){
-  if(!bud||bud<=0)return rules;let cur=[...rules];
-  if(tE(fn(cur))<=bud)return cur;
-  const rem=cur.map((r,i)=>({r,i,p:r.priority||0})).filter(x=>x.p<PI.C).sort((a,b)=>a.p-b.p||b.i-a.i);
-  for(const c of rem){cur=cur.filter(r=>r!==c.r);if(tE(fn(cur))<=bud)break;}
+function saveSettings(){
+  promptDirty=true; const ctx=getCtx();
+  try{
+    if(hasChatCtx()) ctx.saveMetadata();
+    else if(typeof ctx.saveSettingsDebounced==='function') ctx.saveSettingsDebounced();
+  }catch(e){}
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 9 · TOKEN ESTIMATION  (#17 BPE-aware)
+// ══════════════════════════════════════════════════════════════════
+
+function estimateTokens(text){
+  if(!text)return 0;
+  let tokens=0;
+  for(const chunk of text.split(/\s+/)){
+    if(!chunk)continue;
+    const cyr=(chunk.match(/[\u0400-\u04FF]/g)||[]).length;
+    const lat=chunk.length-cyr;
+    tokens+=Math.ceil(cyr/2)+Math.ceil(lat/3.5);
+  }
+  tokens+=Math.ceil(((text.match(/\n/g)||[]).length)*0.3);
+  return Math.max(1,tokens);
+}
+
+function applyTokenBudget(rules,budget,formatFn){
+  if(!budget||budget<=0)return rules;
+  let cur=[...rules];
+  if(estimateTokens(formatFn(cur))<=budget)return cur;
+  const removable=cur.map((r,i)=>({r,i,p:r.priority||0})).filter(x=>x.p<PRIORITY.CRITICAL).sort((a,b)=>a.p-b.p||b.i-a.i);
+  for(const item of removable){
+    cur=cur.filter(r=>r!==item.r);
+    if(estimateTokens(formatFn(cur))<=budget)break;
+  }
   return cur;
 }
 
-// ---- Activation ----
-function _iCC(n){if(!n)return false;try{const cn=ctx().characters?.[ctx().characterId]?.name;if(cn&&(cn.toLowerCase()===n.toLowerCase()||ruS(cn)===ruS(n)))return true;}catch(e){}return false;}
-function wCA(cat,rt){
-  if(cat.rules.some(r=>r.enabled&&r.sticky))return true;
-  if(!cat.keywords||!cat.keywords.length)return true;
-  if(akm(cat.keywords,rt))return true;
-  if(_va.has('c_'+cat.id))return true;
+// ══════════════════════════════════════════════════════════════════
+// § 10 · CONFLICT DETECTION  (#8)
+// ══════════════════════════════════════════════════════════════════
+
+const ANTONYM_PAIRS=[
+  ['любит','ненавидит'],['любит','не любит'],['любит','боится'],['любит','избегает'],
+  ['боится','не боится'],['хочет','не хочет'],['верит','не верит'],['доверяет','не доверяет'],
+  ['нравится','не нравится'],['всегда','никогда'],['должен','не должен'],
+  ['likes','hates'],['loves','hates'],['always','never'],['must','must not'],
+  ['trusts','distrusts'],['wants','refuses'],['loves','fears'],['likes','dislikes'],
+];
+
+function detectConflicts(rules){
+  const conflicted=new Set();
+  const active=rules.filter(r=>r.enabled);
+  for(let i=0;i<active.length;i++){
+    for(let j=i+1;j<active.length;j++){
+      const ta=active[i].text.toLowerCase(), tb=active[j].text.toLowerCase();
+      for(const[pos,neg]of ANTONYM_PAIRS){
+        if(!((ta.includes(pos)&&tb.includes(neg))||(ta.includes(neg)&&tb.includes(pos))))continue;
+        const stemsA=new Set(ta.split(/\s+/).map(ruStem).filter(w=>w.length>3));
+        const stemsB=new Set(tb.split(/\s+/).map(ruStem).filter(w=>w.length>3));
+        if([...stemsA].some(w=>stemsB.has(w))){conflicted.add(active[i].id);conflicted.add(active[j].id);}
+      }
+    }
+  }
+  return conflicted;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 11 · ACTIVATION LOGIC
+// ══════════════════════════════════════════════════════════════════
+
+function isCurrentChar(name){
+  if(!name)return false;
+  try{const cn=getCtx().characters?.[getCtx().characterId]?.name;if(cn&&(cn.toLowerCase()===name.toLowerCase()||ruStem(cn)===ruStem(name)))return true;}catch(e){}
   return false;
 }
-function pA(ch,rt){return _iCC(ch.name)||akm([ch.name,...(ch.keywords||[])],rt)||_va.has('c_'+ch.id);}
-function rA(p,rt){
-  const c1=_iCC(p.char1)||akm([p.char1,...(p.keywords||[]).filter(k=>ruS(k)===ruS(p.char1))],rt)||_va.has('c_'+p.id);
-  const c2=_iCC(p.char2)||akm([p.char2,...(p.keywords||[]).filter(k=>ruS(k)===ruS(p.char2))],rt)||_va.has('c_'+p.id);
-  return p.activationMode==='soft'?(c1||c2):(c1&&c2);
+
+function worldCatActive(cat,rt){
+  if(cat.rules.some(r=>r.enabled&&r.sticky))return true;
+  if(!cat.keywords||!cat.keywords.length)return true;
+  if(anyKeywordMatch(cat.keywords,rt))return true;
+  if(vectorActivated.has('c_'+cat.id))return true;
+  return false;
 }
 
-// ---- Prompt building ----
-function _fR(r,s){let t=r.text;if(s.injectDates&&(r.date||r.reason))t+=' ['+[r.date,r.reason].filter(Boolean).join(' \u2014 ')+']';return t;}
+function charIsActive(ch,rt){
+  return isCurrentChar(ch.name)||anyKeywordMatch([ch.name,...(ch.keywords||[])],rt)||vectorActivated.has('c_'+ch.id);
+}
 
-function bW(){
-  const s=gs(),rt=rChat(s.keywordDepth),cp=s.compactMode;const cats=[];
+function pairIsActive(pair,rt){
+  const c1=isCurrentChar(pair.char1)||anyKeywordMatch([pair.char1,...(pair.keywords||[]).filter(k=>ruStem(k)===ruStem(pair.char1))],rt)||vectorActivated.has('c_'+pair.id);
+  const c2=isCurrentChar(pair.char2)||anyKeywordMatch([pair.char2,...(pair.keywords||[]).filter(k=>ruStem(k)===ruStem(pair.char2))],rt)||vectorActivated.has('c_'+pair.id);
+  return pair.activationMode==='soft'?(c1||c2):(c1&&c2);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 12 · PROMPT BUILDING
+// ══════════════════════════════════════════════════════════════════
+
+function fmtRule(r,s){
+  let t=r.text;
+  if(s.injectDates&&(r.date||r.reason))t+=' ['+[r.date,r.reason].filter(Boolean).join(' — ')+']';
+  return t;
+}
+
+function buildWorldPrompt(){
+  const s=getSettings(),rt=recentChatText(s.keywordDepth),cp=s.compactMode,cats=[];
   s.worldRules.forEach(cat=>{
     if(!cat.enabled)return;
-    if(!wCA(cat,rt)){const st=cat.rules.filter(r=>r.enabled&&r.sticky);if(st.length)cats.push({n:cat.name,rules:st});return;}
+    if(!worldCatActive(cat,rt)){const st=cat.rules.filter(r=>r.enabled&&r.sticky);if(st.length)cats.push({n:cat.name,rules:st});return;}
     const ar=cat.rules.filter(r=>r.enabled);if(ar.length)cats.push({n:cat.name,rules:ar});
   });
   if(!cats.length)return '';
   let all=[];cats.forEach(c=>c.rules.forEach(r=>all.push({...r,_c:c.n})));
-  all=aB(all,s.tokenBudgetWorld,rls=>cp?rls.map(r=>r.text).join('; '):rls.map(r=>'- '+r.text).join('\n'));
-  const cm={};all.forEach(r=>{if(!cm[r._c])cm[r._c]=[];cm[r._c].push(r);});
-  if(cp)return '[R:World] '+Object.entries(cm).map(([n,rs])=>n+': '+rs.map(r=>r.text).join('; ')).join(' | ')+' [/R]';
-  const ln=['[WORLD_RULES_START]'];Object.entries(cm).forEach(([n,rs])=>{ln.push('## '+n);rs.forEach(r=>ln.push('- '+r.text));});ln.push('[WORLD_RULES_END]');return ln.join('\n');
+  all=applyTokenBudget(all,s.tokenBudgetWorld,rls=>cp?rls.map(r=>r.text).join('; '):rls.map(r=>'- '+r.text).join('\n'));
+  const gp={};all.forEach(r=>{if(!gp[r._c])gp[r._c]=[];gp[r._c].push(r);});
+  if(cp)return '[R:World] '+Object.entries(gp).map(([n,rs])=>n+': '+rs.map(r=>r.text).join('; ')).join(' | ')+' [/R]';
+  const ln=['[WORLD_RULES_START]'];Object.entries(gp).forEach(([n,rs])=>{ln.push('## '+n);rs.forEach(r=>ln.push('- '+r.text));});ln.push('[WORLD_RULES_END]');return ln.join('\n');
 }
 
-function bP(){
-  const s=gs(),rt=rChat(s.keywordDepth),cp=s.compactMode,parts=[];
+function buildPersonalPrompt(){
+  const s=getSettings(),rt=recentChatText(s.keywordDepth),cp=s.compactMode,parts=[];
   s.personalRules.forEach(ch=>{
-    if(!ch.rules.length||!pA(ch,rt))return;
+    if(!ch.rules.length||!charIsActive(ch,rt))return;
     let rules=ch.rules.filter(r=>r.enabled);if(!rules.length)return;
-    rules=aB(rules,s.tokenBudgetPersonal,rls=>rls.map(r=>_fR(r,s)).join(cp?'; ':'\n'));
+    rules=applyTokenBudget(rules,s.tokenBudgetPersonal,rls=>rls.map(r=>fmtRule(r,s)).join(cp?'; ':'\n'));
     if(!rules.length)return;
-    if(cp)parts.push('[R:'+ch.name+'] '+rules.map(r=>_fR(r,s)).join('; ')+' [/R]');
-    else{const ln=['[PERSONAL: '+ch.name+']'];rules.forEach(r=>ln.push('- '+_fR(r,s)));ln.push('[/PERSONAL]');parts.push(ln.join('\n'));}
+    if(cp)parts.push('[R:'+ch.name+'] '+rules.map(r=>fmtRule(r,s)).join('; ')+' [/R]');
+    else{const ln=['[PERSONAL: '+ch.name+']'];rules.forEach(r=>ln.push('- '+fmtRule(r,s)));ln.push('[/PERSONAL]');parts.push(ln.join('\n'));}
   });
   return parts.join('\n');
 }
 
-function bR(){
-  const s=gs(),rt=rChat(s.keywordDepth),cp=s.compactMode,parts=[];
-  s.relationshipRules.forEach(p=>{
-    if(!p.rules.length||!rA(p,rt))return;
-    let rules=p.rules.filter(r=>r.enabled);if(!rules.length)return;
-    rules=aB(rules,s.tokenBudgetRelations,rls=>rls.map(r=>_fR(r,s)).join(cp?'; ':'\n'));
+function buildRelationsPrompt(){
+  const s=getSettings(),rt=recentChatText(s.keywordDepth),cp=s.compactMode,parts=[];
+  s.relationshipRules.forEach(pair=>{
+    if(!pair.rules.length||!pairIsActive(pair,rt))return;
+    let rules=pair.rules.filter(r=>r.enabled);if(!rules.length)return;
+    rules=applyTokenBudget(rules,s.tokenBudgetRelations,rls=>rls.map(r=>fmtRule(r,s)).join(cp?'; ':'\n'));
     if(!rules.length)return;
-    const lb=p.char1+'\u2192'+p.char2;
-    if(cp)parts.push('[R:'+lb+'] '+rules.map(r=>_fR(r,s)).join('; ')+' [/R]');
-    else{const ln=['[REL: '+lb+']'];rules.forEach(r=>ln.push('- '+_fR(r,s)));ln.push('[/REL]');parts.push(ln.join('\n'));}
+    const lb=pair.char1+'→'+pair.char2;
+    if(cp)parts.push('[R:'+lb+'] '+rules.map(r=>fmtRule(r,s)).join('; ')+' [/R]');
+    else{const ln=['[REL: '+lb+']'];rules.forEach(r=>ln.push('- '+fmtRule(r,s)));ln.push('[/REL]');parts.push(ln.join('\n'));}
   });
   return parts.join('\n');
 }
 
-// ---- Injection ----
-async function uP(){
-  const s=gs();const{setExtensionPrompt:sep,extension_prompt_types:ept}=ctx();
-  if(!sep){_pa=false;_uUI();return;}const pt=ept?.IN_PROMPT??0;
-  if(!s.enabled){sep(MK+'_w','',pt,0);sep(MK+'_p','',pt,0);sep(MK+'_r','',pt,0);_pa=false;}
-  else{const w=bW(),p=bP(),r=bR();_cp={w,p,r};sep(MK+'_w',w,pt,s.depthWorld||0);sep(MK+'_p',p,pt,s.depthPersonal||1);sep(MK+'_r',r,pt,s.depthRelations||2);_pa=!!(w||p||r);}
-  _pd=false;_uUI();
-}
-function _uUI(){
-  $('#wrt_prompt_dot').css('color',_pa?'#34d399':'#4a5568');
-  const $t=$('#wrt_modal_tokens');if(!$t.length)return;
-  if(_pa){const w=tE(_cp.w),p=tE(_cp.p),r=tE(_cp.r);$t.html('<span style="color:#c084fc">\uD83C\uDF0D'+w+'</span> \u00B7 <span style="color:#38bdf8">\uD83D\uDC64'+p+'</span> \u00B7 <span style="color:#fb7185">\uD83D\uDC9E'+r+'</span> \u00B7 \u03A3'+(w+p+r)).css('color','#34d399');}
-  else $t.text('\u25CB \u0432\u044B\u043A\u043B').css('color','#4a5568');
+// ══════════════════════════════════════════════════════════════════
+// § 13 · PROMPT INJECTION + ACTIVATION SUMMARY  (#13)
+// ══════════════════════════════════════════════════════════════════
+
+async function updatePrompts(){
+  const s=getSettings();const{setExtensionPrompt,extension_prompt_types:ept}=getCtx();
+  if(!setExtensionPrompt){promptIsActive=false;refreshStatusUI();return;}
+  const pt=ept?.IN_PROMPT??0;
+  if(!s.enabled){
+    setExtensionPrompt(STORAGE_KEY+'_w','',pt,0);setExtensionPrompt(STORAGE_KEY+'_p','',pt,0);setExtensionPrompt(STORAGE_KEY+'_r','',pt,0);
+    promptIsActive=false;
+  }else{
+    const w=buildWorldPrompt(),p=buildPersonalPrompt(),r=buildRelationsPrompt();
+    currentPrompts={w,p,r};
+    setExtensionPrompt(STORAGE_KEY+'_w',w,pt,s.depthWorld||0);
+    setExtensionPrompt(STORAGE_KEY+'_p',p,pt,s.depthPersonal||1);
+    setExtensionPrompt(STORAGE_KEY+'_r',r,pt,s.depthRelations||2);
+    promptIsActive=!!(w||p||r);
+  }
+  promptDirty=false;
+  refreshStatusUI();
 }
 
-// ---- AI ----
-function exAi(d){
+function countActiveRules(){
+  const s=getSettings(),rt=recentChatText(s.keywordDepth);
+  let wc=0,pc=0,rc=0;
+  s.worldRules.forEach(cat=>{
+    if(!cat.enabled)return;
+    if(worldCatActive(cat,rt)) wc+=cat.rules.filter(r=>r.enabled).length;
+    else wc+=cat.rules.filter(r=>r.enabled&&r.sticky).length;
+  });
+  s.personalRules.forEach(ch=>{if(charIsActive(ch,rt))pc+=ch.rules.filter(r=>r.enabled).length;});
+  s.relationshipRules.forEach(pair=>{if(pairIsActive(pair,rt))rc+=pair.rules.filter(r=>r.enabled).length;});
+  return{wc,pc,rc};
+}
+
+function refreshStatusUI(){
+  $('#wrt_prompt_dot').css('color',promptIsActive?'#34d399':'#4a5568');
+  // Token counter in modal header
+  const $t=$('#wrt_modal_tokens');
+  if($t.length){
+    if(promptIsActive){
+      const w=estimateTokens(currentPrompts.w),p=estimateTokens(currentPrompts.p),r=estimateTokens(currentPrompts.r);
+      $t.html(`<span style="color:#c084fc">🌍${w}</span>&nbsp;·&nbsp;<span style="color:#38bdf8">👤${p}</span>&nbsp;·&nbsp;<span style="color:#fb7185">💞${r}</span>&nbsp;·&nbsp;Σ${w+p+r}`).css('color','#34d399');
+    }else{
+      $t.text(tr('promptOff')).css('color','#4a5568');
+    }
+  }
+  renderActivationSummary();
+}
+
+// #13 — summary bar inside modal tab body
+function renderActivationSummary(){
+  const $bar=$('#wrt_act_summary');if(!$bar.length)return;
+  const{wc,pc,rc}=countActiveRules();
+  const total=wc+pc+rc;
+  if(total>0){
+    $bar.html(trf('activeSummary',wc,pc,rc)).css('color','#34d399').show();
+  }else{
+    $bar.text(tr('noActiveRules')).css('color','#4a5568').show();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 14 · AI
+// ══════════════════════════════════════════════════════════════════
+
+function extractAiText(d){
   if(d?.choices?.[0]?.message?.content!==undefined)return d.choices[0].message.content;
   if(d?.choices?.[0]?.text!==undefined)return d.choices[0].text;
   if(typeof d?.response==='string')return d.response;
   if(Array.isArray(d?.content)){const t=d.content.find(b=>b.type==='text');return t?.text??null;}
-  if(typeof d?.content==='string')return d.content;return null;
+  if(typeof d?.content==='string')return d.content;
+  return null;
 }
-async function aiG(uPr,sP){
-  const c=ctx(),full=sP+'\n\n---\n\n'+uPr;
-  if(typeof c.generateRaw==='function'){try{const r=await c.generateRaw(full,'',false,false,'','normal');if(r?.trim())return r;}catch(e){}}
-  for(const ep of[
-    {url:'/api/backends/chat-completions/generate',body:()=>({messages:[{role:'system',content:sP},{role:'user',content:uPr}],stream:false})},
+
+async function aiGenerate(userPrompt,systemPrompt){
+  const ctx=getCtx(),full=systemPrompt+'\n\n---\n\n'+userPrompt;
+  if(typeof ctx.generateRaw==='function'){
+    try{const r=await ctx.generateRaw(full,'',false,false,'','normal');if(r?.trim())return r;}catch(e){}
+  }
+  const eps=[
+    {url:'/api/backends/chat-completions/generate',body:()=>({messages:[{role:'system',content:systemPrompt},{role:'user',content:userPrompt}],stream:false})},
     {url:'/api/generate',body:()=>({prompt:full,max_new_tokens:2000,stream:false})},
-    {url:'/generate',body:()=>({prompt:full,max_new_tokens:2000,stream:false})}
-  ]){try{const r=await fetch(ep.url,{method:'POST',headers:getHdrs(),body:JSON.stringify(ep.body())});if(!r.ok)continue;const t=exAi(await r.json());if(t?.trim())return t;}catch(e){}}
-  throw new Error('\u041D\u0435\u0442 \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u044F');
+    {url:'/generate',body:()=>({prompt:full,max_new_tokens:2000,stream:false})},
+  ];
+  for(const ep of eps){
+    try{const r=await fetch(ep.url,{method:'POST',headers:getHeaders(),body:JSON.stringify(ep.body())});if(!r.ok)continue;const t=extractAiText(await r.json());if(t?.trim())return t;}catch(e){}
+  }
+  throw new Error(tr('errNoConn'));
 }
-function cCtx(d){return(ctx().chat||[]).slice(-d).map(m=>'['+(m.is_user?'U':'C')+']: '+(m.mes||'').slice(0,600)).join('\n\n');}
-function gLore(){try{const wi=ctx().worldInfoData||ctx().worldInfo||{};const e=[];Object.values(wi).forEach(b=>{const s=b?.entries||b;if(s&&typeof s==='object')Object.values(s).forEach(x=>{if(x?.content)e.push(String(x.content));});});return e.join('\n\n');}catch(e){return '';}}
 
-// ---- Scanning ----
-async function scW(d,wl){
-  const s=gs();const ex=s.worldRules.map(c=>'## '+c.name+'\n'+c.rules.map(r=>'- '+r.text).join('\n')).join('\n\n');
-  const l=wl?gLore():'';
-  return pWR(await aiG(
-    'CHAT:\n'+(cCtx(d)||'(empty)')+(l?'\n\nLORE:\n'+l.slice(0,4000):'')+(ex?'\n\nEXISTING:\n'+ex:'')+'\n\nExtract world rules:',
+function chatContext(depth){
+  return(getCtx().chat||[]).slice(-depth).map(m=>'['+(m.is_user?'U':'C')+']: '+(m.mes||'').slice(0,600)).join('\n\n');
+}
+
+function getLoreText(){
+  try{
+    const wi=getCtx().worldInfoData||getCtx().worldInfo||{};const entries=[];
+    Object.values(wi).forEach(block=>{const items=block?.entries||block;if(items&&typeof items==='object')Object.values(items).forEach(x=>{if(x?.content)entries.push(String(x.content));});});
+    return entries.join('\n\n');
+  }catch(e){return '';}
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 15 · AI SCANNING  (#20 per-tab depth used in dS())
+// ══════════════════════════════════════════════════════════════════
+
+function parseRuleLines(text){
+  const rules=[];
+  (text||'').split('\n').forEach(line=>{
+    const ln=line.trim();if(!ln||/^(EXISTING|OUTPUT|FORMAT|RULES|NOTE|#)/i.test(ln))return;
+    const content=ln.replace(/^[-•*\d.)\]]+\s*/,'');if(content.length<5)return;
+    const outdated=/\[OUTDATED\]/i.test(content);
+    const rt=content.replace(/\[OUTDATED\]/gi,'').trim();
+    if(rt.length>=5)rules.push({id:genId(),text:rt,enabled:!outdated,date:'',reason:'',priority:0,createdAt:nowLabel(),history:[]});
+  });
+  return rules;
+}
+
+async function scanWorld(depth,withLorebook){
+  const s=getSettings();
+  const existing=s.worldRules.map(c=>'## '+c.name+'\n'+c.rules.map(r=>'- '+r.text).join('\n')).join('\n\n');
+  const lore=withLorebook?getLoreText():'';
+  const raw=await aiGenerate(
+    'CHAT:\n'+(chatContext(depth)||'(empty)')+(lore?'\n\nLORE:\n'+lore.slice(0,4000):'')+(existing?'\n\nEXISTING:\n'+existing:'')+'\n\nExtract world rules:',
     'Extract WORLD RULES. FORMAT:\n## Category\n- Rule (max 20 words)\nGroup by topic. ONLY permanent laws/mechanics. Preserve existing, ADD new. ALWAYS write rules in ENGLISH regardless of chat language.'
-  ),s);
-}
-function pWR(t,s){
-  const cats=[];let cur=null;
-  (t||'').split('\n').forEach(l=>{
-    const tr=l.trim();if(!tr)return;
-    const cm=tr.match(/^#{1,3}\s+(.+)/);
-    if(cm){cur={id:uid(),name:cm[1].trim(),enabled:true,keywords:[],rules:[]};const ex=s.worldRules.find(c=>c.name.toLowerCase()===cur.name.toLowerCase());if(ex)cur={...ex,rules:[...ex.rules]};cats.push(cur);return;}
-    const rm=tr.match(/^[-\u2022*]\s+(.+)/);
-    if(rm&&cur){const rt=rm[1].trim();if(rt.length>=5&&!cur.rules.some(r=>r.text.toLowerCase()===rt.toLowerCase()))cur.rules.push({id:uid(),text:rt,enabled:true,sticky:false,priority:0});}
-  });return cats;
+  );
+  return parseWorldResponse(raw,s);
 }
 
-async function scP(name,d,wl){
-  const s=gs();const ex=s.personalRules.find(c=>c.name===name);
-  const et=ex?ex.rules.map(r=>'- '+r.text).join('\n'):'';const l=wl?gLore():'';
-  return pRL(await aiG(
-    'CHAT:\n'+(cCtx(d)||'(empty)')+(l?'\n\nLORE:\n'+l.slice(0,4000):'')+(et?'\n\nEXISTING FOR '+name+':\n'+et:'')+'\n\nExtract personal rules for '+name+':',
+function parseWorldResponse(text,s){
+  const cats=[];let cur=null;
+  (text||'').split('\n').forEach(line=>{
+    const ln=line.trim();if(!ln)return;
+    const cm=ln.match(/^#{1,3}\s+(.+)/);
+    if(cm){
+      cur={id:genId(),name:cm[1].trim(),enabled:true,keywords:[],rules:[]};
+      const ex=s.worldRules.find(c=>c.name.toLowerCase()===cur.name.toLowerCase());
+      if(ex)cur={...ex,rules:[...ex.rules]};
+      cats.push(cur);return;
+    }
+    const rm=ln.match(/^[-•*]\s+(.+)/);
+    if(rm&&cur){const rt=rm[1].trim();if(rt.length>=5&&!cur.rules.some(r=>r.text.toLowerCase()===rt.toLowerCase()))cur.rules.push({id:genId(),text:rt,enabled:true,sticky:false,priority:0,createdAt:nowLabel(),history:[]});}
+  });
+  return cats;
+}
+
+async function scanPersonal(name,depth,withLorebook){
+  const s=getSettings();
+  const ex=s.personalRules.find(c=>c.name===name);
+  const et=ex?ex.rules.map(r=>'- '+r.text).join('\n'):'';
+  const lore=withLorebook?getLoreText():'';
+  return parseRuleLines(await aiGenerate(
+    'CHAT:\n'+(chatContext(depth)||'(empty)')+(lore?'\n\nLORE:\n'+lore.slice(0,4000):'')+(et?'\n\nEXISTING FOR '+name+':\n'+et:'')+'\n\nExtract personal rules for '+name+':',
     'Extract PERSONAL RULES for "'+name+'". Rules=behavioral codes,limits,vows. Numbered list, max 25 words. Preserve existing, ADD new. ALWAYS write rules in ENGLISH regardless of chat language.'
   ));
 }
 
-async function scR(c1,c2,d,wl){
-  const s=gs();const ex=s.relationshipRules.find(p=>p.char1===c1&&p.char2===c2);
-  const et=ex?ex.rules.map(r=>'- '+r.text).join('\n'):'';const l=wl?gLore():'';
-  return pRL(await aiG(
-    'CHAT:\n'+(cCtx(d)||'(empty)')+(l?'\n\nLORE:\n'+l.slice(0,4000):'')+(et?'\n\nEXISTING ('+c1+'\u2192'+c2+'):\n'+et:'')+'\n\nExtract relationship rules:',
+async function scanRelations(c1,c2,depth,withLorebook){
+  const s=getSettings();
+  const ex=s.relationshipRules.find(p=>p.char1===c1&&p.char2===c2);
+  const et=ex?ex.rules.map(r=>'- '+r.text).join('\n'):'';
+  const lore=withLorebook?getLoreText():'';
+  return parseRuleLines(await aiGenerate(
+    'CHAT:\n'+(chatContext(depth)||'(empty)')+(lore?'\n\nLORE:\n'+lore.slice(0,4000):'')+(et?'\n\nEXISTING ('+c1+'→'+c2+'):\n'+et:'')+'\n\nExtract relationship rules:',
     'Extract RELATIONSHIP RULES from "'+c1+'" TOWARD "'+c2+'". Focus on how '+c1+' relates to/treats/feels about '+c2+'. Rules=pacts,dynamics,boundaries,attitudes FROM '+c1+' perspective. Mark [OUTDATED] if contradicted. Numbered list, max 25 words. ALWAYS write rules in ENGLISH regardless of chat language.'
   ));
 }
 
-function pRL(t){
-  const r=[];
-  (t||'').split('\n').forEach(l=>{
-    const tr=l.trim();if(!tr||/^(EXISTING|OUTPUT|FORMAT|RULES|NOTE|#)/i.test(tr))return;
-    const c=tr.replace(/^[-\u2022*\d.)\]]+\s*/,'');if(c.length<5)return;
-    const od=/\[OUTDATED\]/i.test(c);const rt=c.replace(/\[OUTDATED\]/gi,'').trim();
-    if(rt.length>=5)r.push({id:uid(),text:rt,enabled:!od,date:'',reason:'',priority:0});
-  });return r;
-}
+// ══════════════════════════════════════════════════════════════════
+// § 16 · AI CONDENSATION & AUTO-KEYWORDS
+// ══════════════════════════════════════════════════════════════════
 
-// ---- Condensation ----
-async function condR(rules,name){
-  return pRL(await aiG(
-    'Category: '+name+'\nRules:\n'+rules.map((r,i)=>(i+1)+'. '+r.text).join('\n')+'\n\nCondense:',
+async function condenseRules(rules,catName){
+  return parseRuleLines(await aiGenerate(
+    'Category: '+catName+'\nRules:\n'+rules.map((r,i)=>(i+1)+'. '+r.text).join('\n')+'\n\nCondense:',
     'Merge overlapping rules. Output MINIMUM set preserving ALL info. Max 25 words each. Numbered list. ALWAYS write in ENGLISH.'
   ));
 }
 
-function calD(){try{const c=ctx();const cs=_pc()?c.chat_metadata?.calendar_tracker:c.extensionSettings?.calendar_tracker;return cs?.currentDate||'';}catch(e){return '';}}
-
-// ---- Toast ----
-let _tt=null;
-function toast(m,c,u,d){
-  c=c||'#34d399';d=d||4500;clearTimeout(_tt);$('.wrt-toast').remove();
-  $('body').append('<div class="wrt-toast"><div class="wrt-toast-row"><span class="wrt-toast-dot" style="background:'+c+'"></span><span class="wrt-toast-msg">'+esc(m)+'</span>'+(u?'<button class="wrt-toast-undo">\u21A9</button>':'')+'</div></div>');
-  setTimeout(()=>$('.wrt-toast').addClass('wrt-in'),10);
-  if(u)$('.wrt-toast-undo').on('click',()=>{u();$('.wrt-toast').remove();});
-  _tt=setTimeout(()=>{$('.wrt-toast').addClass('wrt-out');setTimeout(()=>$('.wrt-toast').remove(),300);},d);
+function getCalendarDate(){
+  try{const ctx=getCtx();const cs=hasChatCtx()?ctx.chat_metadata?.calendar_tracker:ctx.extensionSettings?.calendar_tracker;return cs?.currentDate||'';}catch(e){return '';}
 }
 
-// ---- Settings panel ----
-function mS(){
-  if($('#wrt_block').length)return;
-  const $x=$('#extensions_settings2,#extensions_settings').first();if(!$x.length)return;
-  $x.append('<div class="wrt-block" id="wrt_block">'
-    +'<div class="wrt-hdr" id="wrt_hdr"><span class="wrt-gem">\uD83D\uDCDC</span><span class="wrt-title">World Rules</span><span class="wrt-badge" id="wrt_badge" style="display:none">0</span><span class="wrt-prompt-dot" id="wrt_prompt_dot" style="color:#4a5568">\u25CF</span><span class="wrt-chev" id="wrt_chev">\u25BE</span></div>'
-    +'<div class="wrt-body" id="wrt_body">'
-    +'<div class="wrt-meta" id="wrt_meta">\u043D\u0435\u0442 \u0434\u0430\u043D\u043D\u044B\u0445</div>'
-    +'<label class="wrt-check-row"><input type="checkbox" id="wrt_en"><span>\u0412\u043A\u043B\u044E\u0447\u0435\u043D\u043E</span></label>'
-    +'<label class="wrt-check-row"><input type="checkbox" id="wrt_cm"><span>\u041A\u043E\u043C\u043F\u0430\u043A\u0442\u043D\u044B\u0439 \u043F\u0440\u043E\u043C\u043F\u0442 (~40%)</span></label>'
-    +'<label class="wrt-check-row"><input type="checkbox" id="wrt_id"><span>\u0414\u0430\u0442\u044B/\u043F\u0440\u0438\u0447\u0438\u043D\u044B \u0432 \u043F\u0440\u043E\u043C\u043F\u0442\u0435</span></label>'
-    +'<label class="wrt-check-row"><input type="checkbox" id="wrt_uv"><span>\uD83E\uDDE0 \u0421\u0435\u043C\u0430\u043D\u0442\u0438\u0447\u0435\u0441\u043A\u0430\u044F \u0430\u043A\u0442\u0438\u0432\u0430\u0446\u0438\u044F</span></label>'
-    +'<div class="wrt-field-label">\u0413\u043B\u0443\u0431\u0438\u043D\u0430 \u0438\u043D\u0436\u0435\u043A\u0446\u0438\u0438</div>'
-    +'<div class="wrt-field-row" style="margin-top:3px"><span class="wrt-flabel">\uD83C\uDF0D</span><input type="range" id="wrt_dw" min="0" max="15" style="flex:1;accent-color:#c084fc;min-width:0"><span id="wrt_dwv" style="font-size:12px;color:#c084fc;min-width:18px;text-align:right">0</span></div>'
-    +'<div class="wrt-field-row" style="margin-top:3px"><span class="wrt-flabel">\uD83D\uDC64</span><input type="range" id="wrt_dp" min="0" max="15" style="flex:1;accent-color:#38bdf8;min-width:0"><span id="wrt_dpv" style="font-size:12px;color:#38bdf8;min-width:18px;text-align:right">1</span></div>'
-    +'<div class="wrt-field-row" style="margin-top:3px"><span class="wrt-flabel">\uD83D\uDC9E</span><input type="range" id="wrt_dr" min="0" max="15" style="flex:1;accent-color:#fb7185;min-width:0"><span id="wrt_drv" style="font-size:12px;color:#fb7185;min-width:18px;text-align:right">2</span></div>'
-    +'<div class="wrt-field-label" style="margin-top:4px">\u0411\u044E\u0434\u0436\u0435\u0442 \u0442\u043E\u043A\u0435\u043D\u043E\u0432 (0=\u221E)</div>'
-    +'<div class="wrt-field-row"><span class="wrt-flabel">\uD83C\uDF0D</span><input type="number" class="wrt-depth-inp" id="wrt_bw" min="0" max="2000" style="width:55px"><span class="wrt-flabel">\uD83D\uDC64</span><input type="number" class="wrt-depth-inp" id="wrt_bp" min="0" max="2000" style="width:55px"><span class="wrt-flabel">\uD83D\uDC9E</span><input type="number" class="wrt-depth-inp" id="wrt_br" min="0" max="2000" style="width:55px"></div>'
-    +'<div class="wrt-field-row" style="margin-top:4px"><span class="wrt-flabel">\uD83D\uDD0D \u041A\u043B\u044E\u0447\u0438</span><input type="number" class="wrt-depth-inp" id="wrt_kwd" min="1" max="50" style="width:50px"><span style="font-size:10px;color:#3d4a60">\u0441\u043E\u043E\u0431\u0449.</span></div>'
-    +'<div class="wrt-field-row" id="wrt_vtrow" style="margin-top:3px;display:none"><span class="wrt-flabel">\uD83E\uDDE0 \u041F\u043E\u0440\u043E\u0433</span><input type="range" id="wrt_vth" min="0.3" max="0.9" step="0.05" style="flex:1;accent-color:#a78bfa;min-width:0"><span id="wrt_vtv" style="font-size:12px;color:#a78bfa;min-width:30px;text-align:right">0.55</span></div>'
-    +'<button class="menu_button wrt-open-btn" id="wrt_open_btn">\uD83D\uDCDC \u041E\u0442\u043A\u0440\u044B\u0442\u044C \u043F\u0440\u0430\u0432\u0438\u043B\u0430</button>'
-    +'<div class="wrt-sec"><div class="wrt-sec-hdr" id="wrt_ch"><span style="font-size:10px;color:#4a5568" id="wrt_cc2">\u25B8</span><span>\uD83D\uDD0C API</span></div>'
-    +'<div class="wrt-sec-body" id="wrt_cb" style="display:none"><button class="menu_button wrt-test-btn" id="wrt_ta">\u26A1 API</button> <button class="menu_button wrt-test-btn" id="wrt_tv">\uD83E\uDDE0 Vec</button><div class="wrt-api-status" id="wrt_ts"></div></div></div>'
-    +'</div></div>');
-  rUI();_bS();
-}
-
-function _bS(){
-  $('#wrt_hdr').on('click',()=>{const $b=$('#wrt_body');$b.slideToggle(180);$('#wrt_chev').text($b.is(':visible')?'\u25BE':'\u25B8');});
-  $('#wrt_ch').on('click',()=>{const $b=$('#wrt_cb');$b.slideToggle(150);$('#wrt_cc2').text($b.is(':visible')?'\u25BE':'\u25B8');});
-  $('#wrt_en').on('change',function(){gs().enabled=this.checked;sv();uP();});
-  $('#wrt_cm').on('change',function(){gs().compactMode=this.checked;sv();uP();});
-  $('#wrt_id').on('change',function(){gs().injectDates=this.checked;sv();uP();});
-  $('#wrt_uv').on('change',async function(){
-    const s=gs();s.useVectors=this.checked;sv();
-    if(this.checked){const ok=await chkVec();if(!ok){toast('Vector \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D','#f87171');s.useVectors=false;this.checked=false;sv();}else{schVec();toast('\u0421\u0435\u043C\u0430\u043D\u0442\u0438\u043A\u0430 \u0432\u043A\u043B','#a78bfa');}}
-    $('#wrt_vtrow').toggle(!!s.useVectors);
-  });
-  let _d={};const db=(k,fn)=>{clearTimeout(_d[k]);_d[k]=setTimeout(fn,400);};
-  $('#wrt_dw').on('input',function(){const v=+this.value;$('#wrt_dwv').text(v);db('w',()=>{gs().depthWorld=v;sv();uP();});});
-  $('#wrt_dp').on('input',function(){const v=+this.value;$('#wrt_dpv').text(v);db('p',()=>{gs().depthPersonal=v;sv();uP();});});
-  $('#wrt_dr').on('input',function(){const v=+this.value;$('#wrt_drv').text(v);db('r',()=>{gs().depthRelations=v;sv();uP();});});
-  $('#wrt_vth').on('input',function(){const v=+this.value;$('#wrt_vtv').text(v.toFixed(2));db('v',()=>{gs().vectorThreshold=v;sv();schVec();});});
-  $('#wrt_kwd').on('change',function(){gs().keywordDepth=Math.max(1,+this.value||5);sv();uP();});
-  $('#wrt_bw').on('change',function(){gs().tokenBudgetWorld=Math.max(0,+this.value||0);sv();uP();});
-  $('#wrt_bp').on('change',function(){gs().tokenBudgetPersonal=Math.max(0,+this.value||0);sv();uP();});
-  $('#wrt_br').on('change',function(){gs().tokenBudgetRelations=Math.max(0,+this.value||0);sv();uP();});
-  $('#wrt_ta').on('click',async()=>{$('#wrt_ts').css('color','#7a8499').text('\u2026');try{await aiG('Reply: OK','Reply: OK');$('#wrt_ts').css('color','#34d399').text('\u2705 API OK');}catch(e){$('#wrt_ts').css('color','#f87171').text('\u2717 '+e.message);}});
-  $('#wrt_tv').on('click',async()=>{$('#wrt_ts').css('color','#7a8499').text('\u2026');const ok=await chkVec();$('#wrt_ts').css('color',ok?'#34d399':'#f87171').text(ok?'\u2705 Vector OK':'\u2717 Vector N/A');});
-  const el=document.getElementById('wrt_open_btn');
-  if(el){let m=false;el.addEventListener('touchstart',e=>{m=false;e.stopPropagation();},{passive:true});el.addEventListener('touchmove',()=>{m=true;},{passive:true});el.addEventListener('touchend',e=>{if(!m){e.preventDefault();e.stopPropagation();oM();}},{passive:false});el.addEventListener('click',oM);}
-}
-
-function rUI(){
-  const s=gs();
-  $('#wrt_en').prop('checked',s.enabled!==false);$('#wrt_cm').prop('checked',!!s.compactMode);$('#wrt_id').prop('checked',!!s.injectDates);$('#wrt_uv').prop('checked',!!s.useVectors);
-  $('#wrt_dw').val(s.depthWorld||0);$('#wrt_dwv').text(s.depthWorld||0);$('#wrt_dp').val(s.depthPersonal||1);$('#wrt_dpv').text(s.depthPersonal||1);$('#wrt_dr').val(s.depthRelations||2);$('#wrt_drv').text(s.depthRelations||2);
-  $('#wrt_kwd').val(s.keywordDepth||5);$('#wrt_bw').val(s.tokenBudgetWorld||0);$('#wrt_bp').val(s.tokenBudgetPersonal||0);$('#wrt_br').val(s.tokenBudgetRelations||0);
-  $('#wrt_vth').val(s.vectorThreshold||0.55);$('#wrt_vtv').text((s.vectorThreshold||0.55).toFixed(2));$('#wrt_vtrow').toggle(!!s.useVectors);
-  uBg();uMt();_uUI();
-}
-function uBg(){const s=gs();const n=s.worldRules.reduce((a,c)=>a+c.rules.length,0)+s.personalRules.reduce((a,c)=>a+c.rules.length,0)+s.relationshipRules.reduce((a,p)=>a+p.rules.length,0);$('#wrt_badge').text(n).toggle(n>0);}
-function uMt(){const s=gs(),p=[];const w=s.worldRules.reduce((a,c)=>a+c.rules.length,0),pe=s.personalRules.reduce((a,c)=>a+c.rules.length,0),r=s.relationshipRules.reduce((a,x)=>a+x.rules.length,0);if(w)p.push('\uD83C\uDF0D'+w);if(pe)p.push('\uD83D\uDC64'+pe);if(r)p.push('\uD83D\uDC9E'+r);$('#wrt_meta').text(p.join(' \u00B7 ')||'\u043D\u0435\u0442');uBg();}
-
-// ---- Modal ----
-function _sh(){$('#wrt_modal').addClass('wrt-mopen');}
-function _hi(){$('#wrt_modal').removeClass('wrt-mopen');}
-function _imo(){return $('#wrt_modal').hasClass('wrt-mopen');}
-function oM(){
-  cNames();if($('#wrt_modal').length){_sh();rT();return;}
-  $('body').append('<div class="wrt-modal" id="wrt_modal"><div class="wrt-modal-inner"><div class="wrt-drag-handle"></div>'
-    +'<div class="wrt-modal-hdr"><span class="wrt-modal-icon">\uD83D\uDCDC</span><span class="wrt-modal-title">World Rules</span><span class="wrt-modal-tokens" id="wrt_modal_tokens"></span><button class="wrt-modal-x" id="wrt_mx">\u2715</button></div>'
-    +'<div class="wrt-tabs" id="wrt_tabs"><button class="wrt-tab active" data-tab="world">\uD83C\uDF0D \u041C\u0438\u0440</button><button class="wrt-tab" data-tab="personal">\uD83D\uDC64 \u041B\u0438\u0447\u043D\u044B\u0435</button><button class="wrt-tab" data-tab="relations">\uD83D\uDC9E \u041E\u0442\u043D\u043E\u0448\u0435\u043D\u0438\u044F</button></div>'
-    +'<div class="wrt-tab-body" id="wrt_tb"></div>'
-    +'<div class="wrt-modal-footer"><button class="wrt-foot-btn" id="wrt_exp">\uD83D\uDCBE \u042D\u043A\u0441\u043F\u043E\u0440\u0442</button><button class="wrt-foot-btn" id="wrt_imp">\uD83D\uDCE5 \u0418\u043C\u043F\u043E\u0440\u0442</button><button class="wrt-foot-btn wrt-foot-clear" id="wrt_clr">\uD83D\uDDD1</button><button class="wrt-foot-btn wrt-foot-close" id="wrt_mx2">\u0417\u0430\u043A\u0440\u044B\u0442\u044C</button></div>'
-    +'</div></div>');
-  _sh();
-  $(document).on('click touchend','#wrt_mx,#wrt_mx2',function(e){e.preventDefault();e.stopPropagation();_hi();});
-  $(document).on('click touchend','#wrt_modal',function(e){if($(e.target).is('#wrt_modal')&&window.innerWidth>600){e.preventDefault();_hi();}});
-  $(document).on('click touchend','#wrt_tabs .wrt-tab',function(e){e.preventDefault();$('#wrt_tabs .wrt-tab').removeClass('active');$(this).addClass('active');activeTab=$(this).data('tab');_sq='';rT();});
-  $(document).on('click touchend','#wrt_exp',function(e){e.preventDefault();e.stopPropagation();xD();});
-  $(document).on('click touchend','#wrt_imp',function(e){e.preventDefault();e.stopPropagation();iD();});
-  $(document).on('click touchend','#wrt_clr',function(e){e.preventDefault();e.stopPropagation();cDa();});
-  rT();
-}
-function rT(){const $b=$('#wrt_tb');if(!$b.length)return;_uUI();if(activeTab==='world')$b.html(tW());else if(activeTab==='personal')$b.html(tP());else $b.html(tRe());bT();}
-
-// ---- Tab helpers ----
-function kwBadge(kws,catId){
-  if(!kws||!kws.length)return '';
-  return '<span class="wrt-kw-badge" data-action="show-kw" data-catid="'+catId+'">\uD83D\uDD11'+kws.length+'</span>'
-    +'<span class="wrt-kw-pills wrt-kw-hidden" id="wrt_kwp_'+catId+'">'+kws.map(k=>'<span class="wrt-kw-pill">'+esc(k)+'</span>').join('')+'</span>';
-}
-function sHr(){return '<div class="wrt-search-row"><input class="wrt-search-inp" id="wrt_sq" value="'+esc(_sq)+'" placeholder="\uD83D\uDD0D \u041F\u043E\u0438\u0441\u043A\u2026">'+(_sq?'<button class="wrt-search-clear" id="wrt_sqc">\u2715</button>':'')+'</div>';}
-function mSr(r){if(!_sq)return true;const q=_sq.toLowerCase();return(r.text||'').toLowerCase().includes(q)||(r.date||'').toLowerCase().includes(q);}
-function pBd(p){const c={0:'#4a5568',1:'#f59e0b',2:'#ef4444'};return '<span class="wrt-prio-badge" style="color:'+c[p||0]+'" title="'+PN[p||0]+'">'+PL[p||0]+'</span>';}
-function cTo(rules,cp){if(!rules.length)return 0;return tE(cp?rules.map(r=>r.text).join('; '):rules.map(r=>'- '+r.text).join('\n'));}
-
-function rRw(r,i,cid,tab,sk,mt){
-  const mp=[];
-  if(mt&&r.date)mp.push('<span class="wrt-rule-date">\uD83D\uDCC5 '+esc(r.date)+'</span>');
-  if(mt&&r.reason)mp.push('<span class="wrt-rule-reason">'+esc(r.reason)+'</span>');
-  if(sk&&r.sticky)mp.push('<span class="wrt-rule-sticky">\uD83D\uDCCC</span>');
-  if(_va.has(r.id))mp.push('<span class="wrt-rule-vec">\uD83E\uDDE0</span>');
-  return '<div class="wrt-rule-row'+(r.enabled?'':' disabled')+'"><span class="wrt-rule-num">'+(i+1)+'.</span>'+pBd(r.priority)
-    +'<div class="wrt-rule-body"><span class="wrt-rule-text" data-action="edit-rule" data-tab="'+tab+'" data-catid="'+cid+'" data-ruleid="'+r.id+'">'+esc(r.text)+'</span>'
-    +(mp.length?'<div class="wrt-rule-meta">'+mp.join('')+'</div>':'')+'</div>'
-    +'<div class="wrt-rule-acts"><button class="wrt-rule-btn" data-action="cycle-prio" data-tab="'+tab+'" data-catid="'+cid+'" data-ruleid="'+r.id+'">'+PL[r.priority||0]+'</button>'
-    +(sk?'<button class="wrt-rule-btn" data-action="sticky-rule" data-tab="'+tab+'" data-catid="'+cid+'" data-ruleid="'+r.id+'">\uD83D\uDCCC</button>':'')
-    +'<button class="wrt-rule-toggle'+(r.enabled?' on':'')+'" data-action="toggle-rule" data-tab="'+tab+'" data-catid="'+cid+'" data-ruleid="'+r.id+'"></button>'
-    +'<button class="wrt-rule-btn" data-action="del-rule" data-tab="'+tab+'" data-catid="'+cid+'" data-ruleid="'+r.id+'">\u2715</button></div></div>';
-}
-
-function aRw(cid,tab,mt){
-  let h='<div class="wrt-add-row" style="padding-left:28px;flex-wrap:wrap"><input class="wrt-add-txt" data-input="ar-'+tab+'-'+cid+'" placeholder="\u041F\u0440\u0430\u0432\u0438\u043B\u043E\u2026" style="flex:1;min-width:130px">';
-  if(mt)h+='<input class="wrt-add-txt-sm" data-input="ad-'+tab+'-'+cid+'" placeholder="\u0414\u0430\u0442\u0430" style="width:85px"><input class="wrt-add-txt-sm" data-input="an-'+tab+'-'+cid+'" placeholder="\u041F\u0440\u0438\u0447\u0438\u043D\u0430" style="width:100px">';
-  return h+'<button class="wrt-add-btn" data-action="add-rule" data-tab="'+tab+'" data-catid="'+cid+'">+</button></div>';
-}
-
-function scHt(tab){
-  const s=gs();let sel='';
-  if(tab==='personal')sel='<select class="wrt-add-select" id="wrt_sc">'+(s.personalRules.length?s.personalRules.map(c=>'<option value="'+esc(c.name)+'">'+esc(c.name)+'</option>').join(''):'<option>\u2014</option>')+'</select>';
-  else if(tab==='relations')sel='<select class="wrt-add-select" id="wrt_sp">'+(s.relationshipRules.length?s.relationshipRules.map(p=>'<option value="'+p.id+'">'+esc(p.char1)+'\u2192'+esc(p.char2)+'</option>').join(''):'<option>\u2014</option>')+'</select>';
-  return '<div class="wrt-scan-row"><span class="wrt-scan-lbl">\u0421\u043A\u0430\u043D</span>'+sel+'<input type="number" class="wrt-depth-inp" id="wrt_sd_'+tab+'" value="'+(s.scanDepth||50)+'" min="5" max="200"><label class="wrt-scan-check"><input type="checkbox" id="wrt_sl_'+tab+'"'+(s.scanWithLorebook?' checked':'')+'><span>\u043B\u043E\u0440\u0431\u0443\u043A</span></label><button class="menu_button wrt-scan-btn" id="wrt_sb_'+tab+'">\u2726 \u0421\u043A\u0430\u043D</button></div><div class="wrt-scan-status" id="wrt_ss_'+tab+'"></div>';
-}
-
-// ---- Tab: World ----
-function tW(){
-  const s=gs(),rt=rChat(s.keywordDepth);let l='';
-  if(!s.worldRules.length){l='<div class="wrt-empty">\u041F\u0440\u0430\u0432\u0438\u043B \u043C\u0438\u0440\u0430 \u043D\u0435\u0442.<br><small>\u0414\u043E\u0431\u0430\u0432\u044C\u0442\u0435 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u044E \u0438\u043B\u0438 \u2726 \u0421\u043A\u0430\u043D</small></div>';}
-  else s.worldRules.forEach(cat=>{
-    const co=!!_cc['w_'+cat.id],fl=cat.rules.filter(r=>mSr(r));if(_sq&&!fl.length)return;
-    const act=wCA(cat,rt),en=cat.rules.filter(r=>r.enabled).length,tk=cTo(cat.rules.filter(r=>r.enabled),s.compactMode);
-    const kw=kwBadge(cat.keywords,cat.id);
-    l+='<div class="wrt-cat-group'+(act?' wrt-cat-active':' wrt-cat-inactive')+'" data-catid="'+cat.id+'">'
-      +'<div class="wrt-cat-hdr" data-section="world" data-catid="'+cat.id+'"><span class="wrt-cat-chev">'+(co?'\u25B8':'\u25BE')+'</span><span class="wrt-cat-name">'+esc(cat.name)+'</span>'+kw
-      +'<span class="wrt-cat-count">'+en+'/'+cat.rules.length+'</span><span class="wrt-cat-tokens">~'+tk+'t</span>'
-      +'<button class="wrt-cat-toggle'+(cat.enabled?' on':'')+'" data-action="toggle-cat" data-tab="world" data-catid="'+cat.id+'"></button>'
-      +'<div class="wrt-cat-actions">'
-      +'<button class="wrt-cat-btn" data-action="condense-cat" data-tab="world" data-catid="'+cat.id+'" title="AI \u043A\u043E\u043D\u0434\u0435\u043D\u0441\u0430\u0446\u0438\u044F">\u26A1</button>'
-      +'<button class="wrt-cat-btn" data-action="auto-kw" data-tab="world" data-catid="'+cat.id+'" title="\u0410\u0432\u0442\u043E-\u043A\u043B\u044E\u0447\u0438">\uD83E\uDD16</button>'
-      +'<button class="wrt-cat-btn" data-action="edit-cat-kw" data-tab="world" data-catid="'+cat.id+'" title="\u041A\u043B\u044E\u0447\u0438">\uD83D\uDD11</button>'
-      +'<button class="wrt-cat-btn" data-action="rename-cat" data-tab="world" data-catid="'+cat.id+'">\u270E</button>'
-      +'<button class="wrt-cat-btn" data-action="del-cat" data-tab="world" data-catid="'+cat.id+'">\u2715</button>'
-      +'</div></div><div class="wrt-cat-body"'+(co?' style="display:none"':'')+'>';
-    (_sq?fl:cat.rules).forEach((r,i)=>{l+=rRw(r,i,cat.id,'world',true,false);});
-    l+=aRw(cat.id,'world',false)+'</div></div>';
-  });
-  return sHr()+'<div class="wrt-list-wrap"><div class="wrt-list">'+l+'</div></div>'
-    +'<div class="wrt-add-row"><input class="wrt-add-txt" id="wrt_awc" placeholder="\u041D\u043E\u0432\u0430\u044F \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u044F\u2026"><button class="wrt-add-btn" id="wrt_awcb">+ \u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u044F</button></div>'
-    +scHt('world');
-}
-
-// ---- Tab: Personal ----
-function tP(){
-  const s=gs(),rt=rChat(s.keywordDepth);let l='';
-  if(!s.personalRules.length){l='<div class="wrt-empty">\u041B\u0438\u0447\u043D\u044B\u0445 \u043F\u0440\u0430\u0432\u0438\u043B \u043D\u0435\u0442</div>';}
-  else s.personalRules.forEach(ch=>{
-    const co=!!_cc['p_'+ch.id],fl=ch.rules.filter(r=>mSr(r));if(_sq&&!fl.length)return;
-    const act=pA(ch,rt),en=ch.rules.filter(r=>r.enabled).length,tk=cTo(ch.rules.filter(r=>r.enabled),s.compactMode);
-    const kw=kwBadge(ch.keywords,ch.id);
-    l+='<div class="wrt-cat-group'+(act?' wrt-cat-active':' wrt-cat-inactive')+'" data-catid="'+ch.id+'">'
-      +'<div class="wrt-cat-hdr" data-section="personal" data-catid="'+ch.id+'"><span class="wrt-cat-chev">'+(co?'\u25B8':'\u25BE')+'</span><span class="wrt-cat-name">'+esc(ch.name)+'</span>'+kw
-      +'<span class="wrt-cat-count">'+en+'/'+ch.rules.length+'</span><span class="wrt-cat-tokens">~'+tk+'t</span>'
-      +'<div class="wrt-cat-actions">'
-      +'<button class="wrt-cat-btn" data-action="condense-cat" data-tab="personal" data-catid="'+ch.id+'">\u26A1</button>'
-      +'<button class="wrt-cat-btn" data-action="auto-kw" data-tab="personal" data-catid="'+ch.id+'" title="\u0410\u0432\u0442\u043E-\u043A\u043B\u044E\u0447\u0438">\uD83E\uDD16</button>'
-      +'<button class="wrt-cat-btn" data-action="edit-char" data-tab="personal" data-catid="'+ch.id+'">\u2699</button>'
-      +'<button class="wrt-cat-btn" data-action="del-cat" data-tab="personal" data-catid="'+ch.id+'">\u2715</button>'
-      +'</div></div><div class="wrt-cat-body"'+(co?' style="display:none"':'')+'>';
-    (_sq?fl:ch.rules).forEach((r,i)=>{l+=rRw(r,i,ch.id,'personal',false,true);});
-    l+=aRw(ch.id,'personal',true)+'</div></div>';
-  });
-  const ns=[...cNames()].filter(Boolean);
-  return(ns.length?'<datalist id="wrt_nl">'+ns.map(n=>'<option value="'+esc(n)+'">').join('')+'</datalist>':'')+sHr()
-    +'<div class="wrt-list-wrap"><div class="wrt-list">'+l+'</div></div>'
-    +'<div class="wrt-add-row"><input class="wrt-add-txt" id="wrt_apn" placeholder="\u0418\u043C\u044F \u043F\u0435\u0440\u0441\u043E\u043D\u0430\u0436\u0430\u2026" list="wrt_nl"><button class="wrt-add-btn" id="wrt_apb">+ \u041F\u0435\u0440\u0441\u043E\u043D\u0430\u0436</button></div>'
-    +scHt('personal');
-}
-
-// ---- Tab: Relations ----
-function tRe(){
-  const s=gs(),rt=rChat(s.keywordDepth);let l='';
-  if(!s.relationshipRules.length){l='<div class="wrt-empty">\u041F\u0440\u0430\u0432\u0438\u043B \u043E\u0442\u043D\u043E\u0448\u0435\u043D\u0438\u0439 \u043D\u0435\u0442</div>';}
-  else s.relationshipRules.forEach(p=>{
-    const co=!!_cc['r_'+p.id],fl=p.rules.filter(r=>mSr(r));if(_sq&&!fl.length)return;
-    const act=rA(p,rt),en=p.rules.filter(r=>r.enabled).length,tk=cTo(p.rules.filter(r=>r.enabled),s.compactMode);
-    const md=p.activationMode==='soft'?'\u043C\u044F\u0433\u043A\u0438\u0439':'\u0441\u0442\u0440\u043E\u0433\u0438\u0439';
-    l+='<div class="wrt-cat-group'+(act?' wrt-cat-active':' wrt-cat-inactive')+'" data-catid="'+p.id+'">'
-      +'<div class="wrt-cat-hdr" data-section="relations" data-catid="'+p.id+'"><span class="wrt-cat-chev">'+(co?'\u25B8':'\u25BE')+'</span>'
-      +'<span class="wrt-pair-badge">'+esc(p.char1)+' <span class="wrt-pair-arrow">\u2192</span> '+esc(p.char2)+'</span>'
-      +'<span class="wrt-act-mode" data-action="toggle-mode" data-catid="'+p.id+'">'+md+'</span>'
-      +'<span class="wrt-cat-count">'+en+'/'+p.rules.length+'</span><span class="wrt-cat-tokens">~'+tk+'t</span>'
-      +'<div class="wrt-cat-actions">'
-      +'<button class="wrt-cat-btn" data-action="condense-cat" data-tab="relations" data-catid="'+p.id+'">\u26A1</button>'
-      +'<button class="wrt-cat-btn" data-action="del-cat" data-tab="relations" data-catid="'+p.id+'">\u2715</button>'
-      +'</div></div><div class="wrt-cat-body"'+(co?' style="display:none"':'')+'>';
-    (_sq?fl:p.rules).forEach((r,i)=>{l+=rRw(r,i,p.id,'relations',false,true);});
-    l+=aRw(p.id,'relations',true)+'</div></div>';
-  });
-  const ns=[...cNames()].filter(Boolean);
-  return(ns.length?'<datalist id="wrt_nlr">'+ns.map(n=>'<option value="'+esc(n)+'">').join('')+'</datalist>':'')+sHr()
-    +'<div class="wrt-list-wrap"><div class="wrt-list">'+l+'</div></div>'
-    +'<div class="wrt-add-row"><input class="wrt-add-txt-sm" id="wrt_ar1" placeholder="\u041A\u0442\u043E\u2026" list="wrt_nlr" style="width:120px"><span style="color:#4a5568">\u2192</span><input class="wrt-add-txt-sm" id="wrt_ar2" placeholder="\u041A \u043A\u043E\u043C\u0443\u2026" list="wrt_nlr" style="width:120px"><button class="wrt-add-btn" id="wrt_arb">+ \u041F\u0430\u0440\u0430</button></div>'
-    +scHt('relations');
-}
-
-// ---- Bind tab events ----
-function bT(){
-  const $b=$('#wrt_tb');
-  $('#wrt_sq').off('input').on('input',function(){_sq=this.value;rT();});
-  $('#wrt_sqc').off('click').on('click',()=>{_sq='';rT();});
-  $b.off('click.ch').on('click.ch','.wrt-cat-hdr',function(e){
-    if($(e.target).closest('[data-action]').length)return;
-    const id=$(this).data('catid'),k=activeTab.charAt(0)+'_'+id;
-    _cc[k]=!_cc[k];
-    $(this).closest('.wrt-cat-group').find('.wrt-cat-body')[_cc[k]?'slideUp':'slideDown'](160);
-    $(this).find('.wrt-cat-chev').text(_cc[k]?'\u25B8':'\u25BE');
-  });
-  $b.off('click.act').on('click.act','[data-action]',function(e){e.stopPropagation();hA($(this));});
-  $b.off('keydown.ar').on('keydown.ar','[data-input^="ar-"]',function(e){if(e.key==='Enter')$(this).closest('.wrt-add-row').find('[data-action="add-rule"]').click();});
-  $('#wrt_awcb').off('click').on('click',()=>{const n=$('#wrt_awc').val().trim();if(!n)return;gs().worldRules.push({id:uid(),name:n,enabled:true,keywords:[],rules:[]});sv();uP();uMt();$('#wrt_awc').val('');rT();});
-  $('#wrt_awc').off('keydown').on('keydown',e=>{if(e.key==='Enter')$('#wrt_awcb').click();});
-  $('#wrt_apb').off('click').on('click',()=>{const n=$('#wrt_apn').val().trim();if(!n)return;const s=gs();if(s.personalRules.some(c=>c.name.toLowerCase()===n.toLowerCase())){toast('\u0423\u0436\u0435 \u0435\u0441\u0442\u044C','#f59e0b');return;}s.personalRules.push({id:uid(),name:n,keywords:[n],rules:[]});sv();uMt();$('#wrt_apn').val('');cNames();rT();});
-  $('#wrt_apn').off('keydown').on('keydown',e=>{if(e.key==='Enter')$('#wrt_apb').click();});
-  $('#wrt_arb').off('click').on('click',()=>{const c1=$('#wrt_ar1').val().trim(),c2=$('#wrt_ar2').val().trim();if(!c1||!c2){toast('\u041E\u0431\u0430 \u0438\u043C\u0435\u043D\u0438','#f59e0b');return;}if(c1.toLowerCase()===c2.toLowerCase()){toast('\u0420\u0430\u0437\u043D\u044B\u0435 \u0438\u043C\u0435\u043D\u0430','#f59e0b');return;}const s=gs();if(s.relationshipRules.some(p=>p.char1.toLowerCase()===c1.toLowerCase()&&p.char2.toLowerCase()===c2.toLowerCase())){toast('\u0423\u0436\u0435 \u0435\u0441\u0442\u044C','#f59e0b');return;}s.relationshipRules.push({id:uid(),char1:c1,char2:c2,keywords:[c1,c2],activationMode:'strict',rules:[]});sv();uMt();$('#wrt_ar1').val('');$('#wrt_ar2').val('');cNames();rT();});
-  $('#wrt_sb_world').off('click').on('click',async function(){await dS('world',$(this));});
-  $('#wrt_sb_personal').off('click').on('click',async function(){await dS('personal',$(this));});
-  $('#wrt_sb_relations').off('click').on('click',async function(){await dS('relations',$(this));});
-}
-
-async function dS(tab,$btn){
-  const $st=$('#wrt_ss_'+tab),d=+$('#wrt_sd_'+tab).val()||50,wl=$('#wrt_sl_'+tab).is(':checked');
-  $btn.prop('disabled',true).text('\u2026');$st.css('color','#7a8499').text('\u0410\u043D\u0430\u043B\u0438\u0437\u0438\u0440\u0443\u044E\u2026');
-  try{const s=gs();
-    if(tab==='world'){
-      const snap=JSON.stringify(s.worldRules);const cats=await scW(d,wl);
-      if(cats.length){cats.forEach(nc=>{const ex=s.worldRules.find(c=>c.name.toLowerCase()===nc.name.toLowerCase());if(ex)nc.rules.forEach(nr=>{if(!ex.rules.some(r=>r.text.toLowerCase()===nr.text.toLowerCase()))ex.rules.push(nr);});else s.worldRules.push(nc);});sv();uP();uMt();rT();$st.css('color','#34d399').text('\u2705');toast('\u041C\u0438\u0440 \u043E\u0431\u043D\u043E\u0432\u043B\u0451\u043D','#c084fc',()=>{s.worldRules=JSON.parse(snap);sv();uP();uMt();rT();});}
-      else $st.text('\u041D\u0438\u0447\u0435\u0433\u043E \u043D\u043E\u0432\u043E\u0433\u043E');
-    }else if(tab==='personal'){
-      const cn=$('#wrt_sc').val();if(!cn)throw new Error('\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435');const ch=s.personalRules.find(c=>c.name===cn);if(!ch)throw new Error('?');
-      const snap=JSON.stringify(ch.rules);const nr=await scP(cn,d,wl);let a=0;
-      nr.forEach(r=>{if(!ch.rules.some(x=>x.text.toLowerCase()===r.text.toLowerCase())){ch.rules.push(r);a++;}});
-      sv();uP();uMt();rT();$st.css('color','#34d399').text('\u2705 +'+a);toast(cn+' +'+a,'#38bdf8',()=>{ch.rules=JSON.parse(snap);sv();uP();uMt();rT();});
-    }else{
-      const pid=$('#wrt_sp').val();if(!pid)throw new Error('\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435');const p=s.relationshipRules.find(x=>x.id===pid);if(!p)throw new Error('?');
-      const snap=JSON.stringify(p.rules);const nr=await scR(p.char1,p.char2,d,wl);let a=0;
-      nr.forEach(r=>{const ei=p.rules.findIndex(x=>x.text.toLowerCase()===r.text.toLowerCase());if(ei===-1){p.rules.push(r);a++;}else if(!r.enabled)p.rules[ei].enabled=false;});
-      sv();uP();uMt();rT();$st.css('color','#34d399').text('\u2705 +'+a);toast('\u041E\u0442\u043D\u043E\u0448\u0435\u043D\u0438\u044F +'+a,'#fb7185',()=>{p.rules=JSON.parse(snap);sv();uP();uMt();rT();});
-    }
-  }catch(e){$st.css('color','#f87171').text('\u2717 '+e.message);}
-  $btn.prop('disabled',false).text('\u2726 \u0421\u043A\u0430\u043D');
-}
-
-// ---- Action handler ----
-function hA($el){
-  const act=$el.data('action'),tab=$el.data('tab')||activeTab,cid=$el.data('catid'),rid=$el.data('ruleid'),s=gs();
-  let arr,cat,rule;
-  if(tab==='world')arr=s.worldRules;else if(tab==='personal')arr=s.personalRules;else arr=s.relationshipRules;
-  if(cid)cat=arr.find(c=>c.id===cid);if(cat&&rid)rule=cat.rules.find(r=>r.id===rid);
-  switch(act){
-    case 'toggle-cat':if(cat){cat.enabled=!cat.enabled;sv();uP();rT();}break;
-    case 'rename-cat':if(cat)oRn(cat);break;
-    case 'edit-char':if(cat)oCE(cat);break;
-    case 'edit-cat-kw':if(cat)oKE(cat);break;
-    case 'toggle-mode':if(cat){cat.activationMode=cat.activationMode==='soft'?'strict':'soft';sv();uP();rT();toast(cat.activationMode==='soft'?'\u041C\u044F\u0433\u043A\u0438\u0439: \u043E\u0434\u0438\u043D \u0438\u0437 \u043F\u0430\u0440\u044B':'\u0421\u0442\u0440\u043E\u0433\u0438\u0439: \u043E\u0431\u0430 \u0432 \u0441\u0446\u0435\u043D\u0435','#fb7185');}break;
-    case 'del-cat':{if(!cat||!confirm('\u0423\u0434\u0430\u043B\u0438\u0442\u044C?'))break;const i=arr.indexOf(cat),rm=arr.splice(i,1)[0];sv();uP();uMt();rT();toast('\u0423\u0434\u0430\u043B\u0435\u043D\u043E','#f87171',()=>{arr.splice(i,0,rm);sv();uP();uMt();rT();});break;}
-    case 'toggle-rule':if(rule){rule.enabled=!rule.enabled;sv();uP();rT();}break;
-    case 'sticky-rule':if(rule){rule.sticky=!rule.sticky;sv();uP();rT();toast(rule.sticky?'\uD83D\uDCCC Sticky':'\u0421\u043D\u044F\u0442\u043E',rule.sticky?'#fbbf24':'#94a3b8');}break;
-    case 'cycle-prio':if(rule){rule.priority=((rule.priority||0)+1)%3;sv();uP();rT();toast(PN[rule.priority],['#4a5568','#f59e0b','#ef4444'][rule.priority]);}break;
-    case 'del-rule':{if(!cat||!rule)break;const i=cat.rules.indexOf(rule);cat.rules.splice(i,1);sv();uP();uMt();rT();toast('\u0423\u0434\u0430\u043B\u0435\u043D\u043E','#f87171',()=>{cat.rules.splice(i,0,rule);sv();uP();uMt();rT();});break;}
-    case 'edit-rule':if(cat&&rule)oRE(cat,rule,tab);break;
-    case 'add-rule':{if(!cat)break;const $t=$('[data-input="ar-'+tab+'-'+cid+'"]'),txt=$t.val().trim();if(!txt){$t.focus();return;}
-      const nr={id:uid(),text:txt,enabled:true,priority:0};
-      if(tab==='world')nr.sticky=false;
-      else{nr.date=$('[data-input="ad-'+tab+'-'+cid+'"]').val()?.trim()||'';nr.reason=$('[data-input="an-'+tab+'-'+cid+'"]').val()?.trim()||'';if(!nr.date){const cd=calD();if(cd)nr.date=cd;}}
-      cat.rules.push(nr);sv();uP();uMt();$t.val('');
-      if(tab!=='world'){$('[data-input="ad-'+tab+'-'+cid+'"]').val('');$('[data-input="an-'+tab+'-'+cid+'"]').val('');}
-      rT();break;}
-    case 'condense-cat':if(cat)dCo(cat,tab);break;
-    case 'show-kw':{const $p=$('#wrt_kwp_'+cid);$p.toggleClass('wrt-kw-hidden');break;}
-    case 'auto-kw':if(cat)autoKw(cat,tab);break;
-  }
-}
-
-async function dCo(cat,tab){
-  const en=cat.rules.filter(r=>r.enabled);
-  if(en.length<3){toast('\u041C\u0438\u043D. 3 \u043F\u0440\u0430\u0432\u0438\u043B\u0430','#f59e0b');return;}
-  const lb=tab==='relations'?(cat.char1+'\u2192'+cat.char2):cat.name;
-  toast('\u041A\u043E\u043D\u0434\u0435\u043D\u0441\u0438\u0440\u0443\u044E\u2026','#a78bfa',null,10000);
-  try{
-    const cd=await condR(en,lb);if(!cd.length){toast('\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C','#f59e0b');return;}
-    const oT=tE(en.map(r=>r.text).join('\n')),nT=tE(cd.map(r=>r.text).join('\n'));
-    if(confirm(en.length+'\u2192'+cd.length+' \u043F\u0440\u0430\u0432\u0438\u043B, ~'+oT+'\u2192~'+nT+' \u0442\u043E\u043A\u0435\u043D\u043E\u0432\n\n'+cd.map((r,i)=>(i+1)+'. '+r.text).join('\n')+'\n\n\u041F\u0440\u0438\u043C\u0435\u043D\u0438\u0442\u044C?')){
-      const snap=JSON.stringify(cat.rules);cat.rules=[...cat.rules.filter(r=>!r.enabled),...cd];sv();uP();uMt();rT();
-      toast('\u041A\u043E\u043D\u0434\u0435\u043D\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u043E','#a78bfa',()=>{cat.rules=JSON.parse(snap);sv();uP();uMt();rT();});
-    }
-  }catch(e){toast('\u041E\u0448\u0438\u0431\u043A\u0430: '+e.message,'#f87171');}
-}
-
-// ---- Auto keywords ----
-async function autoKw(cat,tab){
+async function autoKeywords(cat,tab){
   const name=tab==='relations'?(cat.char1+', '+cat.char2):cat.name;
-  const ruleTexts=cat.rules.map(r=>r.text).join('; ');
-  toast('\u0413\u0435\u043D\u0435\u0440\u0438\u0440\u0443\u044E \u043A\u043B\u044E\u0447\u0438\u2026','#a78bfa',null,8000);
+  showToast(tr('genKw'),'#a78bfa',null,8000);
   try{
-    const result=await aiG(
-      'Name: '+name+'\nRules: '+ruleTexts.slice(0,800)+'\n\nGenerate activation keywords:',
-      'Generate keyword list for a rule category. Keywords activate these rules when found in chat.\n\n'
-      +'OUTPUT: comma-separated list of 5-15 keywords.\n'
-      +'Include: the name itself, all grammatical forms (cases, declensions), related terms, synonyms.\n'
-      +'For Russian names generate ALL case forms: nom, gen, dat, acc, inst, prep.\n'
-      +'For topic categories (Magic, Politics) include related nouns, verbs, adjectives.\n'
-      +'ONLY output the comma-separated list, nothing else.\n'
-      +'Write keywords in the SAME LANGUAGE as the input.'
+    const result=await aiGenerate(
+      'Name: '+name+'\nRules: '+cat.rules.map(r=>r.text).join('; ').slice(0,800)+'\n\nGenerate activation keywords:',
+      'Generate keyword list for a rule category. Keywords activate these rules when found in chat.\nOUTPUT: comma-separated list of 5-15 keywords.\nInclude: the name itself, all grammatical forms (cases, declensions), related terms, synonyms.\nFor Russian names generate ALL case forms: nom, gen, dat, acc, inst, prep.\nFor topic categories include related nouns, verbs, adjectives.\nONLY output the comma-separated list, nothing else.\nWrite keywords in the SAME LANGUAGE as the input.'
     );
     const kws=result.split(',').map(s=>s.trim().replace(/[."']/g,'')).filter(s=>s.length>=2&&s.length<40);
     if(kws.length){
-      const merged=new Set([...(cat.keywords||[]),...kws]);
-      cat.keywords=[...merged];
-      sv();uP();rT();
-      toast('\uD83D\uDD11 +'+kws.length+' \u043A\u043B\u044E\u0447\u0435\u0439','#34d399');
-    }else toast('\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C','#f59e0b');
-  }catch(e){toast('\u041E\u0448\u0438\u0431\u043A\u0430: '+e.message,'#f87171');}
+      cat.keywords=[...new Set([...(cat.keywords||[]),...kws])];
+      saveSettings();updatePrompts();renderTab();
+      showToast(trf('kwAdded',kws.length),'#34d399');
+    }else showToast(tr('kwFail'),'#f59e0b');
+  }catch(e){showToast('Error: '+e.message,'#f87171');}
 }
 
-// ---- Edit modals ----
-function oRn(cat){
+// ══════════════════════════════════════════════════════════════════
+// § 17 · TOAST
+// ══════════════════════════════════════════════════════════════════
+
+let toastTimer=null;
+
+function showToast(msg,color,undoFn,duration){
+  color=color||'#34d399';duration=duration||4500;
+  clearTimeout(toastTimer);$('.wrt-toast').remove();
+  $('body').append('<div class="wrt-toast"><div class="wrt-toast-row">'
+    +'<span class="wrt-toast-dot" style="background:'+color+'"></span>'
+    +'<span class="wrt-toast-msg">'+escHtml(msg)+'</span>'
+    +(undoFn?'<button class="wrt-toast-undo">↩</button>':'')
+    +'</div></div>');
+  setTimeout(()=>$('.wrt-toast').addClass('wrt-in'),10);
+  if(undoFn)$('.wrt-toast-undo').on('click',()=>{undoFn();$('.wrt-toast').remove();});
+  toastTimer=setTimeout(()=>{$('.wrt-toast').addClass('wrt-out');setTimeout(()=>$('.wrt-toast').remove(),300);},duration);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 18 · EXPORT / IMPORT  (#15 selective)
+// ══════════════════════════════════════════════════════════════════
+
+function buildExportPayload(opts){
+  const s=getSettings(),payload={};
+  if(opts.world)     payload.worldRules=s.worldRules;
+  if(opts.personal)  payload.personalRules=s.personalRules;
+  if(opts.relations) payload.relationshipRules=s.relationshipRules;
+  if(opts.settings){
+    ['depthWorld','depthPersonal','depthRelations','keywordDepth',
+     'scanDepthWorld','scanDepthPersonal','scanDepthRelations',
+     'tokenBudgetWorld','tokenBudgetPersonal','tokenBudgetRelations',
+     'compactMode','injectDates','useVectors','vectorThreshold','lang'
+    ].forEach(k=>{payload[k]=s[k];});
+  }
+  return payload;
+}
+
+function downloadJson(payload,filename){
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.click();
+  showToast(tr('exported'),'#34d399');
+}
+
+function applyImport(data){
+  const s=getSettings();
+  ['worldRules','personalRules','relationshipRules'].forEach(k=>{if(Array.isArray(data[k]))s[k]=data[k];});
+  ['depthWorld','depthPersonal','depthRelations','keywordDepth',
+   'scanDepthWorld','scanDepthPersonal','scanDepthRelations',
+   'tokenBudgetWorld','tokenBudgetPersonal','tokenBudgetRelations',
+   'compactMode','injectDates','useVectors','vectorThreshold','lang'
+  ].forEach(k=>{if(data[k]!==undefined)s[k]=data[k];});
+  if(data.lang)currentLang=data.lang;
+  saveSettings();updatePrompts();rebuildMetaUI();rebuildUI();renderTab();
+}
+
+// #15 — Selective export modal
+function openExportModal(){
   $('.wrt-edit-overlay').remove();
-  $('body').append('<div class="wrt-edit-overlay"><div class="wrt-edit-modal"><div class="wrt-edit-hdr"><span class="wrt-edit-title">\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435</span><button class="wrt-edit-x" id="wrx">\u2715</button></div><div class="wrt-edit-body"><input class="wrt-einput" id="wrv" value="'+esc(cat.name)+'"></div><div class="wrt-edit-footer"><button class="menu_button" id="wrc">\u041E\u0442\u043C\u0435\u043D\u0430</button><button class="menu_button wrt-save-btn" id="wrs">\uD83D\uDCBE</button></div></div></div>');
-  $('#wrv').focus().select();$('#wrx,#wrc').on('click',()=>$('.wrt-edit-overlay').remove());
-  $('#wrs').on('click',()=>{const v=$('#wrv').val().trim();if(!v)return;cat.name=v;sv();uP();rT();$('.wrt-edit-overlay').remove();});
+  $('body').append(
+    '<div class="wrt-edit-overlay" id="wrt_exp_ov">'
+    +'<div class="wrt-edit-modal">'
+    +'<div class="wrt-edit-hdr"><span class="wrt-edit-title">'+tr('exportTitle')+'</span>'
+    +'<button class="wrt-edit-x" id="wrt_exp_x">✕</button></div>'
+    +'<div class="wrt-edit-body">'
+    +'<label class="wrt-check-row"><input type="checkbox" id="wrt_ex_w" checked><span>'+tr('exportWorld')+'</span></label>'
+    +'<label class="wrt-check-row"><input type="checkbox" id="wrt_ex_p" checked><span>'+tr('exportPersonal')+'</span></label>'
+    +'<label class="wrt-check-row"><input type="checkbox" id="wrt_ex_r" checked><span>'+tr('exportRelations')+'</span></label>'
+    +'<label class="wrt-check-row"><input type="checkbox" id="wrt_ex_s" checked><span>'+tr('exportSettings')+'</span></label>'
+    +'</div>'
+    +'<div class="wrt-edit-footer">'
+    +'<button class="menu_button" id="wrt_exp_c">'+tr('cancel')+'</button>'
+    +'<button class="menu_button wrt-save-btn" id="wrt_exp_ok">'+tr('doExport')+'</button>'
+    +'</div></div></div>'
+  );
+  $('#wrt_exp_x,#wrt_exp_c').on('click',()=>$('.wrt-edit-overlay').remove());
+  $('#wrt_exp_ok').on('click',()=>{
+    const opts={world:$('#wrt_ex_w').is(':checked'),personal:$('#wrt_ex_p').is(':checked'),relations:$('#wrt_ex_r').is(':checked'),settings:$('#wrt_ex_s').is(':checked')};
+    if(!opts.world&&!opts.personal&&!opts.relations&&!opts.settings){showToast('Выберите хотя бы один раздел','#f59e0b');return;}
+    downloadJson(buildExportPayload(opts),'wrt_'+Date.now()+'.json');
+    $('.wrt-edit-overlay').remove();
+  });
+}
+
+function doImport(){
+  const input=document.createElement('input');input.type='file';input.accept='.json';
+  input.onchange=e=>{
+    const file=e.target.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{try{applyImport(JSON.parse(ev.target.result));showToast(tr('imported'),'#34d399');}catch(e){showToast(tr('importErr'),'#f87171');}};
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+function clearAll(){
+  if(!confirm(tr('confirmClear')))return;
+  const s=getSettings();
+  const snap=JSON.stringify({w:s.worldRules,p:s.personalRules,r:s.relationshipRules});
+  s.worldRules=[];s.personalRules=[];s.relationshipRules=[];
+  saveSettings();updatePrompts();rebuildMetaUI();rebuildUI();renderTab();
+  showToast(tr('cleared'),'#f87171',()=>{
+    const d=JSON.parse(snap);const s2=getSettings();
+    s2.worldRules=d.w;s2.personalRules=d.p;s2.relationshipRules=d.r;
+    saveSettings();updatePrompts();rebuildMetaUI();rebuildUI();renderTab();
+  },8000);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 19 · SETTINGS PANEL  (#16 lang toggle, #20 per-tab scan depths)
+// ══════════════════════════════════════════════════════════════════
+
+function buildSettingsPanel(){
+  if($('#wrt_block').length)return;
+  const $x=$('#extensions_settings2,#extensions_settings').first();if(!$x.length)return;
+
+  $x.append(
+    '<div class="wrt-block" id="wrt_block">'
+    +'<div class="wrt-hdr" id="wrt_hdr">'
+    +'<span class="wrt-gem">📜</span><span class="wrt-title">World Rules</span>'
+    +'<span class="wrt-badge" id="wrt_badge" style="display:none">0</span>'
+    +'<span class="wrt-prompt-dot" id="wrt_prompt_dot" style="color:#4a5568">●</span>'
+    +'<span class="wrt-chev" id="wrt_chev">▾</span>'
+    +'</div>'
+    +'<div class="wrt-body" id="wrt_body">'
+    +'<div class="wrt-meta" id="wrt_meta">'+tr('noData')+'</div>'
+
+    +'<label class="wrt-check-row"><input type="checkbox" id="wrt_en"><span>'+tr('enabled')+'</span></label>'
+    +'<label class="wrt-check-row"><input type="checkbox" id="wrt_cm"><span>'+tr('compact')+'</span></label>'
+    +'<label class="wrt-check-row"><input type="checkbox" id="wrt_id"><span>'+tr('injectDates')+'</span></label>'
+    +'<label class="wrt-check-row"><input type="checkbox" id="wrt_uv"><span>'+tr('semanticAct')+'</span></label>'
+
+    // #16 lang toggle
+    +'<div class="wrt-field-label">'+tr('lang')+'</div>'
+    +'<div class="wrt-field-row" style="margin-top:3px;gap:5px">'
+    +'<button class="wrt-lang-btn" data-lang="ru" id="wrt_lang_ru">RU</button>'
+    +'<button class="wrt-lang-btn" data-lang="en" id="wrt_lang_en">EN</button>'
+    +'</div>'
+
+    +'<div class="wrt-field-label">'+tr('injDepth')+'</div>'
+    +'<div class="wrt-field-row" style="margin-top:3px"><span class="wrt-flabel">🌍</span><input type="range" id="wrt_dw" min="0" max="15" style="flex:1;accent-color:#c084fc;min-width:0"><span id="wrt_dwv" style="font-size:12px;color:#c084fc;min-width:18px;text-align:right">0</span></div>'
+    +'<div class="wrt-field-row" style="margin-top:3px"><span class="wrt-flabel">👤</span><input type="range" id="wrt_dp" min="0" max="15" style="flex:1;accent-color:#38bdf8;min-width:0"><span id="wrt_dpv" style="font-size:12px;color:#38bdf8;min-width:18px;text-align:right">1</span></div>'
+    +'<div class="wrt-field-row" style="margin-top:3px"><span class="wrt-flabel">💞</span><input type="range" id="wrt_dr" min="0" max="15" style="flex:1;accent-color:#fb7185;min-width:0"><span id="wrt_drv" style="font-size:12px;color:#fb7185;min-width:18px;text-align:right">2</span></div>'
+
+    +'<div class="wrt-field-label" style="margin-top:4px">'+tr('tokenBudget')+'</div>'
+    +'<div class="wrt-field-row">'
+    +'<span class="wrt-flabel">🌍</span><input type="number" class="wrt-depth-inp" id="wrt_bw" min="0" max="2000" style="width:55px">'
+    +'<span class="wrt-flabel">👤</span><input type="number" class="wrt-depth-inp" id="wrt_bp" min="0" max="2000" style="width:55px">'
+    +'<span class="wrt-flabel">💞</span><input type="number" class="wrt-depth-inp" id="wrt_br" min="0" max="2000" style="width:55px">'
+    +'</div>'
+
+    +'<div class="wrt-field-row" style="margin-top:4px">'
+    +'<span class="wrt-flabel">🔍 '+tr('kwDepth')+'</span>'
+    +'<input type="number" class="wrt-depth-inp" id="wrt_kwd" min="1" max="50" style="width:50px">'
+    +'<span style="font-size:10px;color:#3d4a60">'+tr('msgs')+'</span>'
+    +'</div>'
+
+    +'<div class="wrt-field-row" id="wrt_vtrow" style="margin-top:3px;display:none">'
+    +'<span class="wrt-flabel">'+tr('vecThreshold')+'</span>'
+    +'<input type="range" id="wrt_vth" min="0.3" max="0.9" step="0.05" style="flex:1;accent-color:#a78bfa;min-width:0">'
+    +'<span id="wrt_vtv" style="font-size:12px;color:#a78bfa;min-width:30px;text-align:right">0.55</span>'
+    +'</div>'
+
+    +'<button class="menu_button wrt-open-btn" id="wrt_open_btn">'+tr('openBtn')+'</button>'
+
+    +'<div class="wrt-sec">'
+    +'<div class="wrt-sec-hdr" id="wrt_ch"><span style="font-size:10px;color:#4a5568" id="wrt_cc2">▸</span><span>'+tr('apiSec')+'</span></div>'
+    +'<div class="wrt-sec-body" id="wrt_cb" style="display:none">'
+    +'<button class="menu_button wrt-test-btn" id="wrt_ta">⚡ API</button> '
+    +'<button class="menu_button wrt-test-btn" id="wrt_tv">🧠 Vec</button>'
+    +'<div class="wrt-api-status" id="wrt_ts"></div>'
+    +'</div></div>'
+
+    +'</div></div>'
+  );
+
+  syncSettingsUI();
+  bindSettingsEvents();
+}
+
+function syncSettingsUI(){
+  const s=getSettings();
+  $('#wrt_en').prop('checked',s.enabled!==false);
+  $('#wrt_cm').prop('checked',!!s.compactMode);
+  $('#wrt_id').prop('checked',!!s.injectDates);
+  $('#wrt_uv').prop('checked',!!s.useVectors);
+  $('#wrt_dw').val(s.depthWorld||0);          $('#wrt_dwv').text(s.depthWorld||0);
+  $('#wrt_dp').val(s.depthPersonal||1);        $('#wrt_dpv').text(s.depthPersonal||1);
+  $('#wrt_dr').val(s.depthRelations||2);       $('#wrt_drv').text(s.depthRelations||2);
+  $('#wrt_kwd').val(s.keywordDepth||5);
+  $('#wrt_bw').val(s.tokenBudgetWorld||0);
+  $('#wrt_bp').val(s.tokenBudgetPersonal||0);
+  $('#wrt_br').val(s.tokenBudgetRelations||0);
+  $('#wrt_vth').val(s.vectorThreshold||0.55);
+  $('#wrt_vtv').text((s.vectorThreshold||0.55).toFixed(2));
+  $('#wrt_vtrow').toggle(!!s.useVectors);
+  $('#wrt_lang_ru').toggleClass('active',currentLang==='ru');
+  $('#wrt_lang_en').toggleClass('active',currentLang==='en');
+  rebuildMetaUI();
+}
+
+function rebuildMetaUI(){
+  const s=getSettings();
+  const nw=s.worldRules.reduce((a,c)=>a+c.rules.length,0);
+  const np=s.personalRules.reduce((a,c)=>a+c.rules.length,0);
+  const nr=s.relationshipRules.reduce((a,x)=>a+x.rules.length,0);
+  const total=nw+np+nr;
+  $('#wrt_badge').text(total).toggle(total>0);
+  const parts=[];if(nw)parts.push('🌍'+nw);if(np)parts.push('👤'+np);if(nr)parts.push('💞'+nr);
+  $('#wrt_meta').text(parts.join(' · ')||tr('noData'));
+}
+
+function rebuildUI(){syncSettingsUI();}
+
+function bindSettingsEvents(){
+  const db={};const debounce=(k,fn)=>{clearTimeout(db[k]);db[k]=setTimeout(fn,400);};
+
+  $('#wrt_hdr').on('click',()=>{const $b=$('#wrt_body');$b.slideToggle(180);$('#wrt_chev').text($b.is(':visible')?'▾':'▸');});
+  $('#wrt_ch').on('click',()=>{const $b=$('#wrt_cb');$b.slideToggle(150);$('#wrt_cc2').text($b.is(':visible')?'▾':'▸');});
+
+  $('#wrt_en').on('change',function(){getSettings().enabled=this.checked;saveSettings();updatePrompts();});
+  $('#wrt_cm').on('change',function(){getSettings().compactMode=this.checked;saveSettings();updatePrompts();});
+  $('#wrt_id').on('change',function(){getSettings().injectDates=this.checked;saveSettings();updatePrompts();});
+
+  $('#wrt_uv').on('change',async function(){
+    const s=getSettings();s.useVectors=this.checked;saveSettings();
+    if(this.checked){const ok=await checkVectors();if(!ok){showToast(tr('vecOff'),'#f87171');s.useVectors=false;this.checked=false;saveSettings();}else{scheduleVectors();showToast(tr('vecOn'),'#a78bfa');}}
+    $('#wrt_vtrow').toggle(!!s.useVectors);
+  });
+
+  // #16 language toggle
+  $(document).on('click','[data-lang]',function(){
+    const lang=$(this).data('lang');if(!['ru','en'].includes(lang))return;
+    currentLang=lang;getSettings().lang=lang;saveSettings();
+    $('#wrt_lang_ru').toggleClass('active',lang==='ru');
+    $('#wrt_lang_en').toggleClass('active',lang==='en');
+    if(isModalOpen())renderTab();
+  });
+
+  $('#wrt_dw').on('input',function(){const v=+this.value;$('#wrt_dwv').text(v);debounce('dw',()=>{getSettings().depthWorld=v;saveSettings();updatePrompts();});});
+  $('#wrt_dp').on('input',function(){const v=+this.value;$('#wrt_dpv').text(v);debounce('dp',()=>{getSettings().depthPersonal=v;saveSettings();updatePrompts();});});
+  $('#wrt_dr').on('input',function(){const v=+this.value;$('#wrt_drv').text(v);debounce('dr',()=>{getSettings().depthRelations=v;saveSettings();updatePrompts();});});
+  $('#wrt_vth').on('input',function(){const v=+this.value;$('#wrt_vtv').text(v.toFixed(2));debounce('vt',()=>{getSettings().vectorThreshold=v;saveSettings();scheduleVectors();});});
+  $('#wrt_kwd').on('change',function(){getSettings().keywordDepth=Math.max(1,+this.value||5);saveSettings();updatePrompts();});
+  $('#wrt_bw').on('change',function(){getSettings().tokenBudgetWorld=Math.max(0,+this.value||0);saveSettings();updatePrompts();});
+  $('#wrt_bp').on('change',function(){getSettings().tokenBudgetPersonal=Math.max(0,+this.value||0);saveSettings();updatePrompts();});
+  $('#wrt_br').on('change',function(){getSettings().tokenBudgetRelations=Math.max(0,+this.value||0);saveSettings();updatePrompts();});
+
+  $('#wrt_ta').on('click',async()=>{$('#wrt_ts').css('color','#7a8499').text('…');try{await aiGenerate('Reply: OK','Reply: OK');$('#wrt_ts').css('color','#34d399').text(tr('apiOk'));}catch(e){$('#wrt_ts').css('color','#f87171').text('✗ '+e.message);}});
+  $('#wrt_tv').on('click',async()=>{$('#wrt_ts').css('color','#7a8499').text('…');const ok=await checkVectors();$('#wrt_ts').css('color',ok?'#34d399':'#f87171').text(ok?tr('vecOk'):tr('vecNA'));});
+
+  // mobile-safe open button
+  const el=document.getElementById('wrt_open_btn');
+  if(el){
+    let moved=false;
+    el.addEventListener('touchstart',()=>{moved=false;},{passive:true});
+    el.addEventListener('touchmove',()=>{moved=true;},{passive:true});
+    el.addEventListener('touchend',e=>{if(!moved){e.preventDefault();openModal();}},{passive:false});
+    el.addEventListener('click',openModal);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 20 · MODAL
+// ══════════════════════════════════════════════════════════════════
+
+function isModalOpen(){return $('#wrt_modal').hasClass('wrt-mopen');}
+function showModal(){$('#wrt_modal').addClass('wrt-mopen');}
+function closeModal(){$('#wrt_modal').removeClass('wrt-mopen');}
+
+function openModal(){
+  collectNames();
+  if($('#wrt_modal').length){showModal();renderTab();return;}
+
+  $('body').append(
+    '<div class="wrt-modal" id="wrt_modal">'
+    +'<div class="wrt-modal-inner">'
+    +'<div class="wrt-drag-handle"></div>'
+    +'<div class="wrt-modal-hdr">'
+    +'<span class="wrt-modal-icon">📜</span>'
+    +'<span class="wrt-modal-title">World Rules</span>'
+    +'<span class="wrt-modal-tokens" id="wrt_modal_tokens"></span>'
+    +'<button class="wrt-modal-x" id="wrt_mx">✕</button>'
+    +'</div>'
+    +'<div class="wrt-tabs" id="wrt_tabs">'
+    +'<button class="wrt-tab active" data-tab="world">'+tr('worldTab')+'</button>'
+    +'<button class="wrt-tab" data-tab="personal">'+tr('personalTab')+'</button>'
+    +'<button class="wrt-tab" data-tab="relations">'+tr('relTab')+'</button>'
+    +'</div>'
+    // #13 Activation summary bar
+    +'<div id="wrt_act_summary" class="wrt-act-summary" style="display:none"></div>'
+    +'<div class="wrt-tab-body" id="wrt_tb"></div>'
+    +'<div class="wrt-modal-footer">'
+    +'<button class="wrt-foot-btn" id="wrt_exp_btn">'+tr('exportBtn')+'</button>'
+    +'<button class="wrt-foot-btn" id="wrt_imp_btn">'+tr('importBtn')+'</button>'
+    +'<button class="wrt-foot-btn wrt-foot-clear" id="wrt_clr_btn">'+tr('clearBtn')+'</button>'
+    +'<button class="wrt-foot-btn wrt-foot-close" id="wrt_cls_btn">'+tr('closeBtn')+'</button>'
+    +'</div>'
+    +'</div></div>'
+  );
+
+  showModal();
+  refreshStatusUI();
+
+  // Close
+  $(document).on('click touchend','#wrt_mx,#wrt_cls_btn',e=>{e.preventDefault();e.stopPropagation();closeModal();});
+  $(document).on('click touchend','#wrt_modal',function(e){if($(e.target).is('#wrt_modal')&&window.innerWidth>600){e.preventDefault();closeModal();}});
+  // Tabs
+  $(document).on('click touchend','#wrt_tabs .wrt-tab',function(e){
+    e.preventDefault();
+    $('#wrt_tabs .wrt-tab').removeClass('active');$(this).addClass('active');
+    activeTab=$(this).data('tab');searchQuery='';renderTab();
+  });
+  // Footer
+  $(document).on('click touchend','#wrt_exp_btn',e=>{e.preventDefault();e.stopPropagation();openExportModal();});
+  $(document).on('click touchend','#wrt_imp_btn',e=>{e.preventDefault();e.stopPropagation();doImport();});
+  $(document).on('click touchend','#wrt_clr_btn',e=>{e.preventDefault();e.stopPropagation();clearAll();});
+
+  renderTab();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 21 · TAB RENDERING
+// ══════════════════════════════════════════════════════════════════
+
+function renderTab(){
+  const $b=$('#wrt_tb');if(!$b.length)return;
+  refreshStatusUI();
+  if(activeTab==='world')      $b.html(buildWorldTabHtml());
+  else if(activeTab==='personal') $b.html(buildPersonalTabHtml());
+  else                          $b.html(buildRelationsTabHtml());
+  bindTabEvents();
+}
+
+// ── search bar
+function searchBarHtml(){
+  return '<div class="wrt-search-row">'
+    +'<input class="wrt-search-inp" id="wrt_sq" value="'+escHtml(searchQuery)+'" placeholder="'+tr('searchPh')+'">'
+    +(searchQuery?'<button class="wrt-search-clear" id="wrt_sqc">✕</button>':'')
+    +'</div>';
+}
+
+function matchesSearch(rule){
+  if(!searchQuery)return true;
+  const q=searchQuery.toLowerCase();
+  return(rule.text||'').toLowerCase().includes(q)||(rule.date||'').toLowerCase().includes(q);
+}
+
+// ── priority badge
+function prioBadgeHtml(p){
+  const colors={0:'#4a5568',1:'#f59e0b',2:'#ef4444'};
+  return'<span class="wrt-prio-badge" style="color:'+colors[p||0]+'" title="'+prioName(p||0)+'">'+PRIO_ICON[p||0]+'</span>';
+}
+
+// ── keyword badge
+function kwBadgeHtml(kws,catId){
+  if(!kws||!kws.length)return'';
+  return'<span class="wrt-kw-badge" data-action="show-kw" data-catid="'+catId+'">🔑'+kws.length+'</span>'
+    +'<span class="wrt-kw-pills wrt-kw-hidden" id="wrt_kwp_'+catId+'">'+kws.map(k=>'<span class="wrt-kw-pill">'+escHtml(k)+'</span>').join('')+'</span>';
+}
+
+// ── count tokens for display
+function catTokens(rules,compact){
+  if(!rules.length)return 0;
+  return estimateTokens(compact?rules.map(r=>r.text).join('; '):rules.map(r=>'- '+r.text).join('\n'));
+}
+
+// ── single rule row  (#8 conflict, #10 drag handle, #11 history btn)
+function ruleRowHtml(rule,idx,catId,tab,isWorld,showMeta,conflicts){
+  const conflict=conflicts&&conflicts.has(rule.id);
+  const meta=[];
+  if(showMeta&&rule.date)  meta.push('<span class="wrt-rule-date">📅 '+escHtml(rule.date)+'</span>');
+  if(showMeta&&rule.reason)meta.push('<span class="wrt-rule-reason">'+escHtml(rule.reason)+'</span>');
+  if(isWorld&&rule.sticky) meta.push('<span class="wrt-rule-sticky">📌</span>');
+  if(vectorActivated.has(rule.id))meta.push('<span class="wrt-rule-vec">🧠</span>');
+  if(conflict)             meta.push('<span class="wrt-rule-conflict" title="'+tr('conflictTip')+'">⚠</span>');
+
+  return'<div class="wrt-rule-row'+(rule.enabled?'':' disabled')+'" '
+    +'data-ruleid="'+rule.id+'" data-catid="'+catId+'" data-tab="'+tab+'" '
+    +'draggable="true">'
+    // drag handle (#10)
+    +'<span class="wrt-drag-grip" title="drag to reorder">≡</span>'
+    +'<span class="wrt-rule-num">'+(idx+1)+'.</span>'
+    +prioBadgeHtml(rule.priority)
+    +'<div class="wrt-rule-body">'
+    +'<span class="wrt-rule-text" data-action="edit-rule" data-tab="'+tab+'" data-catid="'+catId+'" data-ruleid="'+rule.id+'">'+escHtml(rule.text)+'</span>'
+    +(meta.length?'<div class="wrt-rule-meta">'+meta.join('')+'</div>':'')
+    +'</div>'
+    +'<div class="wrt-rule-acts">'
+    +'<button class="wrt-rule-btn" data-action="cycle-prio" data-tab="'+tab+'" data-catid="'+catId+'" data-ruleid="'+rule.id+'">'+PRIO_ICON[rule.priority||0]+'</button>'
+    +(isWorld?'<button class="wrt-rule-btn" data-action="sticky-rule" data-tab="'+tab+'" data-catid="'+catId+'" data-ruleid="'+rule.id+'" title="sticky">📌</button>':'')
+    // #11 history button
+    +(rule.history&&rule.history.length?'<button class="wrt-rule-btn" data-action="show-history" data-tab="'+tab+'" data-catid="'+catId+'" data-ruleid="'+rule.id+'" title="history">📋</button>':'')
+    +'<button class="wrt-rule-toggle'+(rule.enabled?' on':'')+'" data-action="toggle-rule" data-tab="'+tab+'" data-catid="'+catId+'" data-ruleid="'+rule.id+'"></button>'
+    +'<button class="wrt-rule-btn" data-action="del-rule" data-tab="'+tab+'" data-catid="'+catId+'" data-ruleid="'+rule.id+'">✕</button>'
+    +'</div></div>';
+}
+
+// ── add-rule row
+function addRuleRowHtml(catId,tab,showMeta){
+  let h='<div class="wrt-add-row" style="padding-left:28px;flex-wrap:wrap">'
+    +'<input class="wrt-add-txt" data-input="ar-'+tab+'-'+catId+'" placeholder="'+tr('rulePh')+'" style="flex:1;min-width:130px">';
+  if(showMeta){
+    h+='<input class="wrt-add-txt-sm" data-input="ad-'+tab+'-'+catId+'" placeholder="'+tr('dateLabel')+'" style="width:85px">'
+      +'<input class="wrt-add-txt-sm" data-input="an-'+tab+'-'+catId+'" placeholder="'+tr('reasonLabel')+'" style="width:100px">';
+  }
+  return h+'<button class="wrt-add-btn" data-action="add-rule" data-tab="'+tab+'" data-catid="'+catId+'">+</button></div>';
+}
+
+// ── scan row  (#20 per-tab depth input)
+function scanRowHtml(tab){
+  const s=getSettings();
+  const depthKey={'world':'scanDepthWorld','personal':'scanDepthPersonal','relations':'scanDepthRelations'}[tab];
+  const depth=s[depthKey]||50;
+  let sel='';
+  if(tab==='personal') sel='<select class="wrt-add-select" id="wrt_sc">'+(s.personalRules.length?s.personalRules.map(c=>'<option value="'+escHtml(c.name)+'">'+escHtml(c.name)+'</option>').join(''):'<option>—</option>')+'</select>';
+  else if(tab==='relations') sel='<select class="wrt-add-select" id="wrt_sp">'+(s.relationshipRules.length?s.relationshipRules.map(p=>'<option value="'+p.id+'">'+escHtml(p.char1)+'→'+escHtml(p.char2)+'</option>').join(''):'<option>—</option>')+'</select>';
+  return'<div class="wrt-scan-row"><span class="wrt-scan-lbl">'+tr('scan')+'</span>'+sel
+    +'<input type="number" class="wrt-depth-inp" id="wrt_sd_'+tab+'" value="'+depth+'" min="5" max="200" style="width:52px" title="'+tr('scanDepthLbl')+'">'
+    +'<label class="wrt-scan-check"><input type="checkbox" id="wrt_sl_'+tab+'"'+(s.scanWithLorebook?' checked':'')+'><span>'+tr('lorebook')+'</span></label>'
+    +'<button class="menu_button wrt-scan-btn" id="wrt_sb_'+tab+'">'+tr('scanBtn')+'</button>'
+    +'</div><div class="wrt-scan-status" id="wrt_ss_'+tab+'"></div>';
+}
+
+// ── WORLD TAB
+function buildWorldTabHtml(){
+  const s=getSettings(),rt=recentChatText(s.keywordDepth);
+  let list='';
+  if(!s.worldRules.length){
+    list='<div class="wrt-empty">'+escHtml(tr('noWorld'))+'</div>';
+  }else{
+    s.worldRules.forEach(cat=>{
+      const collapsed=!!collapsedCats['w_'+cat.id];
+      const filtered=cat.rules.filter(r=>matchesSearch(r));
+      if(searchQuery&&!filtered.length)return;
+      const active=worldCatActive(cat,rt);
+      const enabledCount=cat.rules.filter(r=>r.enabled).length;
+      const tokens=catTokens(cat.rules.filter(r=>r.enabled),s.compactMode);
+      const conflicts=detectConflicts(cat.rules);
+      const kw=kwBadgeHtml(cat.keywords,cat.id);
+
+      list+='<div class="wrt-cat-group'+(active?' wrt-cat-active':' wrt-cat-inactive')+'" data-catid="'+cat.id+'">'
+        +'<div class="wrt-cat-hdr" data-section="world" data-catid="'+cat.id+'">'
+        +'<span class="wrt-cat-chev">'+(collapsed?'▸':'▾')+'</span>'
+        +'<span class="wrt-cat-name">'+escHtml(cat.name)+'</span>'+kw
+        +'<span class="wrt-cat-count">'+enabledCount+'/'+cat.rules.length+'</span>'
+        +'<span class="wrt-cat-tokens">~'+tokens+'t</span>'
+        +(conflicts.size?'<span style="color:#f59e0b;font-size:10px" title="'+tr('conflictTip')+'">⚠</span>':'')
+        +'<button class="wrt-cat-toggle'+(cat.enabled?' on':'')+'" data-action="toggle-cat" data-tab="world" data-catid="'+cat.id+'"></button>'
+        +'<div class="wrt-cat-actions">'
+        +'<button class="wrt-cat-btn" data-action="condense-cat" data-tab="world" data-catid="'+cat.id+'" title="AI condense">⚡</button>'
+        +'<button class="wrt-cat-btn" data-action="auto-kw" data-tab="world" data-catid="'+cat.id+'" title="auto-keywords">🤖</button>'
+        +'<button class="wrt-cat-btn" data-action="edit-cat-kw" data-tab="world" data-catid="'+cat.id+'" title="keywords">🔑</button>'
+        +'<button class="wrt-cat-btn" data-action="rename-cat" data-tab="world" data-catid="'+cat.id+'">✎</button>'
+        +'<button class="wrt-cat-btn" data-action="del-cat" data-tab="world" data-catid="'+cat.id+'">✕</button>'
+        +'</div></div>'
+        +'<div class="wrt-cat-body"'+(collapsed?' style="display:none"':'')+'>';
+      (searchQuery?filtered:cat.rules).forEach((r,i)=>{list+=ruleRowHtml(r,i,cat.id,'world',true,false,conflicts);});
+      list+=addRuleRowHtml(cat.id,'world',false)+'</div></div>';
+    });
+  }
+
+  const ns=[...collectNames()].filter(Boolean);
+  const datalist=ns.length?'<datalist id="wrt_nl">'+ns.map(n=>'<option value="'+escHtml(n)+'">').join('')+'</datalist>':'';
+
+  return datalist+searchBarHtml()
+    +'<div class="wrt-list-wrap"><div class="wrt-list">'+list+'</div></div>'
+    +'<div class="wrt-add-row"><input class="wrt-add-txt" id="wrt_awc" placeholder="'+tr('newCatPh')+'"><button class="wrt-add-btn" id="wrt_awcb">'+tr('addCat')+'</button></div>'
+    +scanRowHtml('world');
+}
+
+// ── PERSONAL TAB
+function buildPersonalTabHtml(){
+  const s=getSettings(),rt=recentChatText(s.keywordDepth);
+  let list='';
+  if(!s.personalRules.length){
+    list='<div class="wrt-empty">'+escHtml(tr('noPersonal'))+'</div>';
+  }else{
+    s.personalRules.forEach(ch=>{
+      const collapsed=!!collapsedCats['p_'+ch.id];
+      const filtered=ch.rules.filter(r=>matchesSearch(r));
+      if(searchQuery&&!filtered.length)return;
+      const active=charIsActive(ch,rt);
+      const enabledCount=ch.rules.filter(r=>r.enabled).length;
+      const tokens=catTokens(ch.rules.filter(r=>r.enabled),s.compactMode);
+      const conflicts=detectConflicts(ch.rules);
+      const kw=kwBadgeHtml(ch.keywords,ch.id);
+
+      list+='<div class="wrt-cat-group'+(active?' wrt-cat-active':' wrt-cat-inactive')+'" data-catid="'+ch.id+'">'
+        +'<div class="wrt-cat-hdr" data-section="personal" data-catid="'+ch.id+'">'
+        +'<span class="wrt-cat-chev">'+(collapsed?'▸':'▾')+'</span>'
+        +'<span class="wrt-cat-name">'+escHtml(ch.name)+'</span>'+kw
+        +'<span class="wrt-cat-count">'+enabledCount+'/'+ch.rules.length+'</span>'
+        +'<span class="wrt-cat-tokens">~'+tokens+'t</span>'
+        +(conflicts.size?'<span style="color:#f59e0b;font-size:10px" title="'+tr('conflictTip')+'">⚠</span>':'')
+        +'<div class="wrt-cat-actions">'
+        +'<button class="wrt-cat-btn" data-action="condense-cat" data-tab="personal" data-catid="'+ch.id+'">⚡</button>'
+        +'<button class="wrt-cat-btn" data-action="auto-kw" data-tab="personal" data-catid="'+ch.id+'" title="auto-keywords">🤖</button>'
+        +'<button class="wrt-cat-btn" data-action="edit-char" data-tab="personal" data-catid="'+ch.id+'">⚙</button>'
+        +'<button class="wrt-cat-btn" data-action="del-cat" data-tab="personal" data-catid="'+ch.id+'">✕</button>'
+        +'</div></div>'
+        +'<div class="wrt-cat-body"'+(collapsed?' style="display:none"':'')+'>';
+      (searchQuery?filtered:ch.rules).forEach((r,i)=>{list+=ruleRowHtml(r,i,ch.id,'personal',false,true,conflicts);});
+      list+=addRuleRowHtml(ch.id,'personal',true)+'</div></div>';
+    });
+  }
+
+  const ns=[...collectNames()].filter(Boolean);
+  const datalist=ns.length?'<datalist id="wrt_nl">'+ns.map(n=>'<option value="'+escHtml(n)+'">').join('')+'</datalist>':'';
+
+  return datalist+searchBarHtml()
+    +'<div class="wrt-list-wrap"><div class="wrt-list">'+list+'</div></div>'
+    +'<div class="wrt-add-row"><input class="wrt-add-txt" id="wrt_apn" placeholder="'+tr('whoLabel')+'" list="wrt_nl"><button class="wrt-add-btn" id="wrt_apb">'+tr('addChar')+'</button></div>'
+    +scanRowHtml('personal');
+}
+
+// ── RELATIONS TAB
+function buildRelationsTabHtml(){
+  const s=getSettings(),rt=recentChatText(s.keywordDepth);
+  let list='';
+  if(!s.relationshipRules.length){
+    list='<div class="wrt-empty">'+escHtml(tr('noRelations'))+'</div>';
+  }else{
+    s.relationshipRules.forEach(pair=>{
+      const collapsed=!!collapsedCats['r_'+pair.id];
+      const filtered=pair.rules.filter(r=>matchesSearch(r));
+      if(searchQuery&&!filtered.length)return;
+      const active=pairIsActive(pair,rt);
+      const enabledCount=pair.rules.filter(r=>r.enabled).length;
+      const tokens=catTokens(pair.rules.filter(r=>r.enabled),s.compactMode);
+      const conflicts=detectConflicts(pair.rules);
+      const md=pair.activationMode==='soft'?tr('softMode'):tr('strictMode');
+
+      list+='<div class="wrt-cat-group'+(active?' wrt-cat-active':' wrt-cat-inactive')+'" data-catid="'+pair.id+'">'
+        +'<div class="wrt-cat-hdr" data-section="relations" data-catid="'+pair.id+'">'
+        +'<span class="wrt-cat-chev">'+(collapsed?'▸':'▾')+'</span>'
+        +'<span class="wrt-pair-badge">'+escHtml(pair.char1)+' <span class="wrt-pair-arrow">→</span> '+escHtml(pair.char2)+'</span>'
+        +'<span class="wrt-act-mode" data-action="toggle-mode" data-catid="'+pair.id+'">'+md+'</span>'
+        +'<span class="wrt-cat-count">'+enabledCount+'/'+pair.rules.length+'</span>'
+        +'<span class="wrt-cat-tokens">~'+tokens+'t</span>'
+        +(conflicts.size?'<span style="color:#f59e0b;font-size:10px" title="'+tr('conflictTip')+'">⚠</span>':'')
+        +'<div class="wrt-cat-actions">'
+        +'<button class="wrt-cat-btn" data-action="condense-cat" data-tab="relations" data-catid="'+pair.id+'">⚡</button>'
+        +'<button class="wrt-cat-btn" data-action="del-cat" data-tab="relations" data-catid="'+pair.id+'">✕</button>'
+        +'</div></div>'
+        +'<div class="wrt-cat-body"'+(collapsed?' style="display:none"':'')+'>';
+      (searchQuery?filtered:pair.rules).forEach((r,i)=>{list+=ruleRowHtml(r,i,pair.id,'relations',false,true,conflicts);});
+      list+=addRuleRowHtml(pair.id,'relations',true)+'</div></div>';
+    });
+  }
+
+  const ns=[...collectNames()].filter(Boolean);
+  const datalist=ns.length?'<datalist id="wrt_nlr">'+ns.map(n=>'<option value="'+escHtml(n)+'">').join('')+'</datalist>':'';
+
+  return datalist+searchBarHtml()
+    +'<div class="wrt-list-wrap"><div class="wrt-list">'+list+'</div></div>'
+    +'<div class="wrt-add-row">'
+    +'<input class="wrt-add-txt-sm" id="wrt_ar1" placeholder="'+tr('whoLabel')+'" list="wrt_nlr" style="width:120px">'
+    +'<span style="color:#4a5568">→</span>'
+    +'<input class="wrt-add-txt-sm" id="wrt_ar2" placeholder="'+tr('toWhomLabel')+'" list="wrt_nlr" style="width:120px">'
+    +'<button class="wrt-add-btn" id="wrt_arb">'+tr('addPair')+'</button>'
+    +'</div>'
+    +scanRowHtml('relations');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 22 · EDIT MODALS  (#11 save to history on rule edit)
+// ══════════════════════════════════════════════════════════════════
+
+function openRenameCatModal(cat){
+  $('.wrt-edit-overlay').remove();
+  $('body').append(
+    '<div class="wrt-edit-overlay"><div class="wrt-edit-modal">'
+    +'<div class="wrt-edit-hdr"><span class="wrt-edit-title">'+tr('nameLabel')+'</span><button class="wrt-edit-x" id="wrx">✕</button></div>'
+    +'<div class="wrt-edit-body"><input class="wrt-einput" id="wrv" value="'+escHtml(cat.name)+'"></div>'
+    +'<div class="wrt-edit-footer"><button class="menu_button" id="wrc">'+tr('cancel')+'</button><button class="menu_button wrt-save-btn" id="wrs">'+tr('save')+'</button></div>'
+    +'</div></div>'
+  );
+  $('#wrv').focus().select();
+  $('#wrx,#wrc').on('click',()=>$('.wrt-edit-overlay').remove());
+  $('#wrs').on('click',()=>{const v=$('#wrv').val().trim();if(!v)return;cat.name=v;saveSettings();updatePrompts();renderTab();$('.wrt-edit-overlay').remove();});
   $('#wrv').on('keydown',e=>{if(e.key==='Enter')$('#wrs').click();});
 }
 
-function oKE(cat){
+function openEditKwModal(cat){
   $('.wrt-edit-overlay').remove();
-  $('body').append('<div class="wrt-edit-overlay"><div class="wrt-edit-modal"><div class="wrt-edit-hdr"><span class="wrt-edit-title">\u041A\u043B\u044E\u0447\u0438: '+esc(cat.name)+'</span><button class="wrt-edit-x" id="wkx">\u2715</button></div><div class="wrt-edit-body"><div class="wrt-elabel">\u0427\u0435\u0440\u0435\u0437 \u0437\u0430\u043F\u044F\u0442\u0443\u044E</div><input class="wrt-einput" id="wkv" value="'+esc((cat.keywords||[]).join(', '))+'" placeholder="\u043C\u0430\u0433\u0438\u044F, \u0437\u0430\u043A\u043B\u0438\u043D\u0430\u043D\u0438\u0435"><div style="font-size:10px;color:#3d4a60;margin-top:4px">\u041F\u0443\u0441\u0442\u043E = \u0432\u0441\u0435\u0433\u0434\u0430 \u0430\u043A\u0442\u0438\u0432\u043D\u0430</div></div><div class="wrt-edit-footer"><button class="menu_button" id="wkc">\u041E\u0442\u043C\u0435\u043D\u0430</button><button class="menu_button wrt-save-btn" id="wks">\uD83D\uDCBE</button></div></div></div>');
-  $('#wkv').focus();$('#wkx,#wkc').on('click',()=>$('.wrt-edit-overlay').remove());
-  $('#wks').on('click',()=>{cat.keywords=$('#wkv').val().split(',').map(s=>s.trim()).filter(Boolean);sv();uP();rT();$('.wrt-edit-overlay').remove();});
+  $('body').append(
+    '<div class="wrt-edit-overlay"><div class="wrt-edit-modal">'
+    +'<div class="wrt-edit-hdr"><span class="wrt-edit-title">'+tr('kwLabel')+': '+escHtml(cat.name)+'</span><button class="wrt-edit-x" id="wkx">✕</button></div>'
+    +'<div class="wrt-edit-body">'
+    +'<div class="wrt-elabel">'+tr('kwLabel')+'</div>'
+    +'<input class="wrt-einput" id="wkv" value="'+escHtml((cat.keywords||[]).join(', '))+'">'
+    +'<div style="font-size:10px;color:#3d4a60;margin-top:4px">'+tr('alwaysActive')+'</div>'
+    +'</div>'
+    +'<div class="wrt-edit-footer"><button class="menu_button" id="wkc">'+tr('cancel')+'</button><button class="menu_button wrt-save-btn" id="wks">'+tr('save')+'</button></div>'
+    +'</div></div>'
+  );
+  $('#wkv').focus();
+  $('#wkx,#wkc').on('click',()=>$('.wrt-edit-overlay').remove());
+  $('#wks').on('click',()=>{cat.keywords=$('#wkv').val().split(',').map(s=>s.trim()).filter(Boolean);saveSettings();updatePrompts();renderTab();$('.wrt-edit-overlay').remove();});
 }
 
-function oCE(ch){
+function openEditCharModal(ch){
   $('.wrt-edit-overlay').remove();
-  $('body').append('<div class="wrt-edit-overlay"><div class="wrt-edit-modal"><div class="wrt-edit-hdr"><span class="wrt-edit-title">'+esc(ch.name)+'</span><button class="wrt-edit-x" id="wcx">\u2715</button></div><div class="wrt-edit-body"><div class="wrt-elabel">\u0418\u043C\u044F</div><input class="wrt-einput" id="wcn" value="'+esc(ch.name)+'"><div class="wrt-elabel">\u041A\u043B\u044E\u0447\u0435\u0432\u044B\u0435 \u0441\u043B\u043E\u0432\u0430</div><input class="wrt-einput" id="wck" value="'+esc((ch.keywords||[]).join(', '))+'" placeholder="\u0413\u0430\u0441\u0438\u043B, \u0413\u0430\u0441\u0438\u043B\u0430, \u0413\u0430\u0441\u0438\u043B\u0443"><div style="font-size:10px;color:#3d4a60;margin-top:3px">\u0424\u043E\u0440\u043C\u044B \u0438\u043C\u0435\u043D\u0438 \u0434\u043B\u044F \u0430\u043A\u0442\u0438\u0432\u0430\u0446\u0438\u0438</div></div><div class="wrt-edit-footer"><button class="menu_button" id="wcc">\u041E\u0442\u043C\u0435\u043D\u0430</button><button class="menu_button wrt-save-btn" id="wcs">\uD83D\uDCBE</button></div></div></div>');
-  $('#wcn').focus();$('#wcx,#wcc').on('click',()=>$('.wrt-edit-overlay').remove());
-  $('#wcs').on('click',()=>{const n=$('#wcn').val().trim(),kw=$('#wck').val().split(',').map(s=>s.trim()).filter(Boolean);if(!n)return;ch.name=n;ch.keywords=kw.length?kw:[n];sv();uP();cNames();rT();$('.wrt-edit-overlay').remove();});
+  $('body').append(
+    '<div class="wrt-edit-overlay"><div class="wrt-edit-modal">'
+    +'<div class="wrt-edit-hdr"><span class="wrt-edit-title">'+escHtml(ch.name)+'</span><button class="wrt-edit-x" id="wcx">✕</button></div>'
+    +'<div class="wrt-edit-body">'
+    +'<div class="wrt-elabel">'+tr('charName')+'</div><input class="wrt-einput" id="wcn" value="'+escHtml(ch.name)+'">'
+    +'<div class="wrt-elabel">'+tr('kwForms')+'</div><input class="wrt-einput" id="wck" value="'+escHtml((ch.keywords||[]).join(', '))+'">'
+    +'</div>'
+    +'<div class="wrt-edit-footer"><button class="menu_button" id="wcc">'+tr('cancel')+'</button><button class="menu_button wrt-save-btn" id="wcs">'+tr('save')+'</button></div>'
+    +'</div></div>'
+  );
+  $('#wcn').focus();
+  $('#wcx,#wcc').on('click',()=>$('.wrt-edit-overlay').remove());
+  $('#wcs').on('click',()=>{
+    const n=$('#wcn').val().trim(),kw=$('#wck').val().split(',').map(s=>s.trim()).filter(Boolean);
+    if(!n)return;ch.name=n;ch.keywords=kw.length?kw:[n];
+    saveSettings();updatePrompts();collectNames();renderTab();$('.wrt-edit-overlay').remove();
+  });
 }
 
-function oRE(cat,rule,tab){
+// #11: Rule edit with history tracking
+function openEditRuleModal(cat,rule,tab){
   $('.wrt-edit-overlay').remove();
-  const m=(tab==='personal'||tab==='relations'),sk=(tab==='world');
-  let f='<div class="wrt-elabel">\u0422\u0435\u043A\u0441\u0442 \u043F\u0440\u0430\u0432\u0438\u043B\u0430</div><textarea class="wrt-etextarea" id="wrt_ret" rows="3">'+esc(rule.text)+'</textarea>';
-  if(m)f+='<div class="wrt-elabel">\u0414\u0430\u0442\u0430 (\u043E\u043F\u0446.)</div><input class="wrt-einput" id="wrt_red" value="'+esc(rule.date||'')+'" placeholder="14 \u041D\u0430\u0435\u0440\u0438\u0441"><div class="wrt-elabel">\u041F\u0440\u0438\u0447\u0438\u043D\u0430 (\u043E\u043F\u0446.)</div><input class="wrt-einput" id="wrt_rer" value="'+esc(rule.reason||'')+'">';
-  f+='<div class="wrt-elabel" style="margin-top:8px">\u041F\u0440\u0438\u043E\u0440\u0438\u0442\u0435\u0442</div><div class="wrt-prio-row">'+[0,1,2].map(p=>'<label class="wrt-prio-opt'+(rule.priority===p?' active':'')+'"><input type="radio" name="wrp" value="'+p+'"'+(rule.priority===p?' checked':'')+'>'+PL[p]+' '+PN[p]+'</label>').join('')+'</div>';
-  if(sk)f+='<label class="wrt-check-row" style="margin-top:6px"><input type="checkbox" id="wrt_resk"'+(rule.sticky?' checked':'')+'><span>\uD83D\uDCCC Sticky \u2014 \u0432\u0441\u0435\u0433\u0434\u0430 \u0432 \u043A\u043E\u043D\u0442\u0435\u043A\u0441\u0442\u0435</span></label>';
-  $('body').append('<div class="wrt-edit-overlay"><div class="wrt-edit-modal"><div class="wrt-edit-hdr"><span class="wrt-edit-title">\u0420\u0435\u0434\u0430\u043A\u0442\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435</span><button class="wrt-edit-x" id="wrex">\u2715</button></div><div class="wrt-edit-body">'+f+'</div><div class="wrt-edit-footer"><button class="menu_button" id="wrec">\u041E\u0442\u043C\u0435\u043D\u0430</button><button class="menu_button wrt-save-btn" id="wres">\uD83D\uDCBE \u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C</button></div></div></div>');
-  $('#wrt_ret').focus();$('#wrex,#wrec').on('click',()=>$('.wrt-edit-overlay').remove());
+  const showMeta=(tab==='personal'||tab==='relations');
+  const isWorld=(tab==='world');
+
+  let body='<div class="wrt-elabel">'+tr('ruleText')+'</div>'
+    +'<textarea class="wrt-etextarea" id="wrt_ret" rows="3">'+escHtml(rule.text)+'</textarea>';
+  if(showMeta){
+    body+='<div class="wrt-elabel">'+tr('dateLabel')+'</div><input class="wrt-einput" id="wrt_red" value="'+escHtml(rule.date||'')+'">'
+      +'<div class="wrt-elabel">'+tr('reasonLabel')+'</div><input class="wrt-einput" id="wrt_rer" value="'+escHtml(rule.reason||'')+'">';
+  }
+  body+='<div class="wrt-elabel" style="margin-top:8px">'+tr('prioLabel')+'</div>'
+    +'<div class="wrt-prio-row">'
+    +[0,1,2].map(p=>'<label class="wrt-prio-opt'+(rule.priority===p?' active':'')+'">'
+      +'<input type="radio" name="wrp" value="'+p+'"'+(rule.priority===p?' checked':'')+'>'
+      +PRIO_ICON[p]+' '+prioName(p)+'</label>').join('')
+    +'</div>';
+  if(isWorld) body+='<label class="wrt-check-row" style="margin-top:6px"><input type="checkbox" id="wrt_resk"'+(rule.sticky?' checked':'')+'>'+tr('stickyLabel')+'</label>';
+
+  // #11: show history preview
+  if(rule.history&&rule.history.length){
+    body+='<div class="wrt-elabel" style="margin-top:8px">'+tr('histEdited')+': '+rule.history.length+'×</div>';
+  }
+
+  $('body').append(
+    '<div class="wrt-edit-overlay"><div class="wrt-edit-modal">'
+    +'<div class="wrt-edit-hdr"><span class="wrt-edit-title">'+tr('editTitle')+'</span><button class="wrt-edit-x" id="wrex">✕</button></div>'
+    +'<div class="wrt-edit-body">'+body+'</div>'
+    +'<div class="wrt-edit-footer"><button class="menu_button" id="wrec">'+tr('cancel')+'</button><button class="menu_button wrt-save-btn" id="wres">'+tr('save')+'</button></div>'
+    +'</div></div>'
+  );
+  $('#wrt_ret').focus();
+  $('#wrex,#wrec').on('click',()=>$('.wrt-edit-overlay').remove());
   $('#wres').on('click',()=>{
-    const t=$('#wrt_ret').val().trim();if(!t)return;rule.text=t;rule.priority=+$('input[name=wrp]:checked').val()||0;
-    if(m){rule.date=($('#wrt_red').val()||'').trim();rule.reason=($('#wrt_rer').val()||'').trim();}
-    if(sk)rule.sticky=$('#wrt_resk').is(':checked');
-    sv();uP();rT();$('.wrt-edit-overlay').remove();toast('\u0421\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043E','#34d399');
+    const newText=$('#wrt_ret').val().trim();if(!newText)return;
+
+    // #11: push old text to history before overwriting
+    if(rule.text&&rule.text!==newText){
+      if(!Array.isArray(rule.history)) rule.history=[];
+      rule.history.push({text:rule.text,at:nowLabel()});
+    }
+
+    rule.text=newText;
+    rule.priority=+$('input[name=wrp]:checked').val()||0;
+    rule.updatedAt=nowLabel();
+    if(showMeta){rule.date=($('#wrt_red').val()||'').trim();rule.reason=($('#wrt_rer').val()||'').trim();}
+    if(isWorld) rule.sticky=$('#wrt_resk').is(':checked');
+    saveSettings();updatePrompts();renderTab();$('.wrt-edit-overlay').remove();
+    showToast(tr('saved'),'#34d399');
   });
   $('#wrt_ret').on('keydown',e=>{if(e.key==='Enter'&&e.ctrlKey)$('#wres').click();});
 }
 
-// ---- Export/Import/Clear ----
-function xD(){
-  const s=gs();
-  const b=new Blob([JSON.stringify({worldRules:s.worldRules,personalRules:s.personalRules,relationshipRules:s.relationshipRules,depthWorld:s.depthWorld,depthPersonal:s.depthPersonal,depthRelations:s.depthRelations,keywordDepth:s.keywordDepth,tokenBudgetWorld:s.tokenBudgetWorld,tokenBudgetPersonal:s.tokenBudgetPersonal,tokenBudgetRelations:s.tokenBudgetRelations,compactMode:s.compactMode,injectDates:s.injectDates,useVectors:s.useVectors,vectorThreshold:s.vectorThreshold},null,2)],{type:'application/json'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='wrt_'+Date.now()+'.json';a.click();toast('\u042D\u043A\u0441\u043F\u043E\u0440\u0442\u0438\u0440\u043E\u0432\u0430\u043D\u043E','#34d399');
-}
-function iD(){
-  const i=document.createElement('input');i.type='file';i.accept='.json';
-  i.onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
-    r.onload=ev=>{try{const d=JSON.parse(ev.target.result),s=gs();
-      ['worldRules','personalRules','relationshipRules'].forEach(k=>{if(Array.isArray(d[k]))s[k]=d[k];});
-      ['depthWorld','depthPersonal','depthRelations','keywordDepth','tokenBudgetWorld','tokenBudgetPersonal','tokenBudgetRelations','compactMode','injectDates','useVectors','vectorThreshold'].forEach(k=>{if(d[k]!==undefined)s[k]=d[k];});
-      sv();uP();uMt();rUI();rT();toast('\u0418\u043C\u043F\u043E\u0440\u0442\u0438\u0440\u043E\u0432\u0430\u043D\u043E','#34d399');
-    }catch(e){toast('\u041E\u0448\u0438\u0431\u043A\u0430 \u0444\u043E\u0440\u043C\u0430\u0442\u0430','#f87171');}};r.readAsText(f);};
-  i.click();
-}
-function cDa(){
-  if(!confirm('\u041E\u0447\u0438\u0441\u0442\u0438\u0442\u044C \u0412\u0421\u0415 \u043F\u0440\u0430\u0432\u0438\u043B\u0430?'))return;
-  const s=gs(),snap=JSON.stringify({w:s.worldRules,p:s.personalRules,r:s.relationshipRules});
-  s.worldRules=[];s.personalRules=[];s.relationshipRules=[];
-  sv();uP();uMt();rUI();rT();
-  toast('\u041E\u0447\u0438\u0449\u0435\u043D\u043E','#f87171',()=>{const d=JSON.parse(snap);s.worldRules=d.w;s.personalRules=d.p;s.relationshipRules=d.r;sv();uP();uMt();rUI();rT();},8000);
+// ══════════════════════════════════════════════════════════════════
+// § 23 · HISTORY MODAL  (#11)
+// ══════════════════════════════════════════════════════════════════
+
+function openHistoryModal(rule){
+  $('.wrt-edit-overlay').remove();
+  const hist=rule.history||[];
+  let body='<div class="wrt-elabel">'+tr('histCreated')+': '+(rule.createdAt||'—')+'</div>';
+  if(rule.updatedAt) body+='<div class="wrt-elabel">'+tr('histEdited')+': '+rule.updatedAt+'</div>';
+  body+='<hr style="border-color:rgba(255,255,255,0.06);margin:10px 0">';
+  if(!hist.length){
+    body+='<div style="color:#3d4a60;font-size:12px">'+tr('histEmpty')+'</div>';
+  }else{
+    body+=hist.slice().reverse().map((h,i)=>
+      '<div style="margin-bottom:10px">'
+      +'<div style="font-size:10px;color:#4a5568">'+escHtml(h.at)+'</div>'
+      +'<div style="font-size:12px;color:#94a3b8;margin-top:3px;padding-left:6px;border-left:2px solid rgba(255,255,255,0.08)">'+escHtml(h.text)+'</div>'
+      +'</div>'
+    ).join('');
+  }
+
+  $('body').append(
+    '<div class="wrt-edit-overlay"><div class="wrt-edit-modal">'
+    +'<div class="wrt-edit-hdr"><span class="wrt-edit-title">'+tr('histTitle')+'</span><button class="wrt-edit-x" id="whx">✕</button></div>'
+    +'<div class="wrt-edit-body">'+body+'</div>'
+    +'<div class="wrt-edit-footer"><button class="menu_button wrt-save-btn" id="whc">'+tr('closeBtn')+'</button></div>'
+    +'</div></div>'
+  );
+  $('#whx,#whc').on('click',()=>$('.wrt-edit-overlay').remove());
 }
 
-// ---- ST events + keyboard ----
-function wE(){
-  const{eventSource:es,event_types:et}=ctx();
-  es.on(et.APP_READY,async()=>{mS();await uP();if(gs().useVectors)chkVec();});
-  es.on(et.CHAT_CHANGED,async()=>{_cc={};_sq='';_va=new Set();cNames();rUI();await uP();if(_imo())rT();});
-  es.on(et.MESSAGE_RECEIVED,async()=>{_pd=true;await uP();if(gs().useVectors&&_vs)schVec();});
-  if(et.GENERATION_ENDED)es.on(et.GENERATION_ENDED,async()=>{_pd=true;await uP();});
-  $(document).on('keydown.wrt',e=>{if(e.altKey&&e.key.toLowerCase()==='r'){e.preventDefault();if(_imo())_hi();else oM();}});
+// ══════════════════════════════════════════════════════════════════
+// § 24 · ACTION HANDLER
+// ══════════════════════════════════════════════════════════════════
+
+function handleAction($el){
+  const act=$el.data('action'),tab=$el.data('tab')||activeTab;
+  const catId=$el.data('catid'),ruleId=$el.data('ruleid');
+  const s=getSettings();
+  let arr,cat,rule;
+  if(tab==='world')arr=s.worldRules;else if(tab==='personal')arr=s.personalRules;else arr=s.relationshipRules;
+  if(catId)cat=arr.find(c=>c.id===catId);if(cat&&ruleId)rule=cat.rules.find(r=>r.id===ruleId);
+
+  switch(act){
+    case 'toggle-cat':
+      if(cat){cat.enabled=!cat.enabled;saveSettings();updatePrompts();renderTab();}break;
+    case 'rename-cat': if(cat)openRenameCatModal(cat);break;
+    case 'edit-char':  if(cat)openEditCharModal(cat);break;
+    case 'edit-cat-kw':if(cat)openEditKwModal(cat);break;
+    case 'toggle-mode':
+      if(cat){cat.activationMode=cat.activationMode==='soft'?'strict':'soft';saveSettings();updatePrompts();renderTab();showToast(cat.activationMode==='soft'?tr('softMode'):tr('strictMode'),'#fb7185');}break;
+    case 'del-cat':{
+      if(!cat||!confirm(tr('confirmDel')))break;
+      const idx=arr.indexOf(cat);arr.splice(idx,1);
+      saveSettings();updatePrompts();rebuildMetaUI();renderTab();
+      showToast(tr('deleted'),'#f87171',()=>{arr.splice(idx,0,cat);saveSettings();updatePrompts();rebuildMetaUI();renderTab();});break;}
+    case 'toggle-rule':
+      if(rule){rule.enabled=!rule.enabled;saveSettings();updatePrompts();renderTab();}break;
+    case 'sticky-rule':
+      if(rule){rule.sticky=!rule.sticky;saveSettings();updatePrompts();renderTab();showToast(rule.sticky?'📌 Sticky':'Снято',rule.sticky?'#fbbf24':'#94a3b8');}break;
+    case 'cycle-prio':
+      if(rule){rule.priority=((rule.priority||0)+1)%3;saveSettings();updatePrompts();renderTab();showToast(prioName(rule.priority),[' #4a5568','#f59e0b','#ef4444'][rule.priority]);}break;
+    case 'del-rule':{
+      if(!cat||!rule)break;
+      const idx=cat.rules.indexOf(rule);cat.rules.splice(idx,1);
+      saveSettings();updatePrompts();rebuildMetaUI();renderTab();
+      showToast(tr('deleted'),'#f87171',()=>{cat.rules.splice(idx,0,rule);saveSettings();updatePrompts();rebuildMetaUI();renderTab();});break;}
+    case 'edit-rule':  if(cat&&rule)openEditRuleModal(cat,rule,tab);break;
+    case 'show-history':if(cat&&rule)openHistoryModal(rule);break;
+    case 'add-rule':{
+      if(!cat)break;
+      const $inp=$('[data-input="ar-'+tab+'-'+catId+'"]'),txt=$inp.val().trim();
+      if(!txt){$inp.focus();return;}
+      const nr={id:genId(),text:txt,enabled:true,priority:0,createdAt:nowLabel(),history:[]};
+      if(tab==='world') nr.sticky=false;
+      else{
+        nr.date=$('[data-input="ad-'+tab+'-'+catId+'"]').val()?.trim()||'';
+        nr.reason=$('[data-input="an-'+tab+'-'+catId+'"]').val()?.trim()||'';
+        if(!nr.date){const cd=getCalendarDate();if(cd)nr.date=cd;}
+      }
+      cat.rules.push(nr);saveSettings();updatePrompts();rebuildMetaUI();$inp.val('');
+      if(tab!=='world'){$('[data-input="ad-'+tab+'-'+catId+'"]').val('');$('[data-input="an-'+tab+'-'+catId+'"]').val('');}
+      renderTab();break;}
+    case 'condense-cat':if(cat)doCondense(cat,tab);break;
+    case 'show-kw':{$('#wrt_kwp_'+catId).toggleClass('wrt-kw-hidden');break;}
+    case 'auto-kw':if(cat)autoKeywords(cat,tab);break;
+  }
 }
 
-// ---- Boot ----
-jQuery(()=>{try{wE();console.log('[World Rules Tracker v2.0] \u2726 loaded');}catch(e){console.error('[WRT]',e);}});
+// ══════════════════════════════════════════════════════════════════
+// § 25 · CONDENSE
+// ══════════════════════════════════════════════════════════════════
+
+async function doCondense(cat,tab){
+  const enabled=cat.rules.filter(r=>r.enabled);
+  if(enabled.length<3){showToast(tr('condenseMin'),'#f59e0b');return;}
+  const label=tab==='relations'?(cat.char1+'→'+cat.char2):cat.name;
+  showToast(tr('condensing'),'#a78bfa',null,10000);
+  try{
+    const condensed=await condenseRules(enabled,label);if(!condensed.length){showToast(tr('condenseFail'),'#f59e0b');return;}
+    const oldTokens=estimateTokens(enabled.map(r=>r.text).join('\n'));
+    const newTokens=estimateTokens(condensed.map(r=>r.text).join('\n'));
+    if(confirm(enabled.length+'→'+condensed.length+' правил, ~'+oldTokens+'→~'+newTokens+' токенов\n\n'+condensed.map((r,i)=>(i+1)+'. '+r.text).join('\n')+'\n\nПрименить?')){
+      const snap=JSON.stringify(cat.rules);
+      cat.rules=[...cat.rules.filter(r=>!r.enabled),...condensed];
+      saveSettings();updatePrompts();rebuildMetaUI();renderTab();
+      showToast(tr('condensed'),'#a78bfa',()=>{cat.rules=JSON.parse(snap);saveSettings();updatePrompts();rebuildMetaUI();renderTab();});
+    }
+  }catch(e){showToast('Error: '+e.message,'#f87171');}
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 26 · SCAN HANDLER  (#20 uses per-tab depth)
+// ══════════════════════════════════════════════════════════════════
+
+async function doScan(tab,$btn){
+  const $status=$('#wrt_ss_'+tab);
+  // #20: read per-tab depth
+  const depth=+$('#wrt_sd_'+tab).val()||50;
+  const withLore=$('#wrt_sl_'+tab).is(':checked');
+
+  // Save per-tab depth back to settings
+  const s=getSettings();
+  const depthKey={'world':'scanDepthWorld','personal':'scanDepthPersonal','relations':'scanDepthRelations'}[tab];
+  s[depthKey]=depth;s.scanWithLorebook=withLore;saveSettings();
+
+  $btn.prop('disabled',true).text('…');
+  $status.css('color','#7a8499').text(tr('scanning'));
+  try{
+    if(tab==='world'){
+      const snap=JSON.stringify(s.worldRules);
+      const cats=await scanWorld(depth,withLore);
+      if(cats.length){
+        cats.forEach(nc=>{
+          const ex=s.worldRules.find(c=>c.name.toLowerCase()===nc.name.toLowerCase());
+          if(ex) nc.rules.forEach(nr=>{if(!ex.rules.some(r=>r.text.toLowerCase()===nr.text.toLowerCase()))ex.rules.push(nr);});
+          else s.worldRules.push(nc);
+        });
+        saveSettings();updatePrompts();rebuildMetaUI();renderTab();
+        $status.css('color','#34d399').text('✅');
+        showToast(tr('worldUpd'),'#c084fc',()=>{s.worldRules=JSON.parse(snap);saveSettings();updatePrompts();rebuildMetaUI();renderTab();});
+      }else $status.text(tr('nothingNew'));
+
+    }else if(tab==='personal'){
+      const name=$('#wrt_sc').val();if(!name)throw new Error(tr('selectTarget'));
+      const ch=s.personalRules.find(c=>c.name===name);if(!ch)throw new Error('?');
+      const snap=JSON.stringify(ch.rules);
+      const newRules=await scanPersonal(name,depth,withLore);let added=0;
+      newRules.forEach(r=>{if(!ch.rules.some(x=>x.text.toLowerCase()===r.text.toLowerCase())){ch.rules.push(r);added++;}});
+      saveSettings();updatePrompts();rebuildMetaUI();renderTab();
+      $status.css('color','#34d399').text('✅ +'+added);
+      showToast(name+' +'+added,'#38bdf8',()=>{ch.rules=JSON.parse(snap);saveSettings();updatePrompts();rebuildMetaUI();renderTab();});
+
+    }else{
+      const pid=$('#wrt_sp').val();if(!pid)throw new Error(tr('selectTarget'));
+      const pair=s.relationshipRules.find(x=>x.id===pid);if(!pair)throw new Error('?');
+      const snap=JSON.stringify(pair.rules);
+      const newRules=await scanRelations(pair.char1,pair.char2,depth,withLore);let added=0;
+      newRules.forEach(r=>{
+        const ei=pair.rules.findIndex(x=>x.text.toLowerCase()===r.text.toLowerCase());
+        if(ei===-1){pair.rules.push(r);added++;}else if(!r.enabled)pair.rules[ei].enabled=false;
+      });
+      saveSettings();updatePrompts();rebuildMetaUI();renderTab();
+      $status.css('color','#34d399').text('✅ +'+added);
+      showToast('Отношения +'+added,'#fb7185',()=>{pair.rules=JSON.parse(snap);saveSettings();updatePrompts();rebuildMetaUI();renderTab();});
+    }
+  }catch(e){$status.css('color','#f87171').text('✗ '+e.message);}
+  $btn.prop('disabled',false).text(tr('scanBtn'));
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 27 · TAB EVENTS + DRAG-AND-DROP  (#10)
+// ══════════════════════════════════════════════════════════════════
+
+function bindTabEvents(){
+  const $tb=$('#wrt_tb');
+
+  // Search
+  $('#wrt_sq').off('input').on('input',function(){searchQuery=this.value;renderTab();});
+  $('#wrt_sqc').off('click').on('click',()=>{searchQuery='';renderTab();});
+
+  // Collapse / expand categories
+  $tb.off('click.ch').on('click.ch','.wrt-cat-hdr',function(e){
+    if($(e.target).closest('[data-action]').length)return;
+    const id=$(this).data('catid');
+    const key=activeTab.charAt(0)+'_'+id;
+    collapsedCats[key]=!collapsedCats[key];
+    $(this).closest('.wrt-cat-group').find('.wrt-cat-body')[collapsedCats[key]?'slideUp':'slideDown'](160);
+    $(this).find('.wrt-cat-chev').text(collapsedCats[key]?'▸':'▾');
+  });
+
+  // Actions
+  $tb.off('click.act').on('click.act','[data-action]',function(e){e.stopPropagation();handleAction($(this));});
+
+  // Enter in add-rule input
+  $tb.off('keydown.ar').on('keydown.ar','[data-input^="ar-"]',function(e){
+    if(e.key==='Enter')$(this).closest('.wrt-add-row').find('[data-action="add-rule"]').click();
+  });
+
+  // Add world category
+  $('#wrt_awcb').off('click').on('click',()=>{
+    const n=$('#wrt_awc').val().trim();if(!n)return;
+    getSettings().worldRules.push({id:genId(),name:n,enabled:true,keywords:[],rules:[]});
+    saveSettings();updatePrompts();rebuildMetaUI();$('#wrt_awc').val('');renderTab();
+  });
+  $('#wrt_awc').off('keydown').on('keydown',e=>{if(e.key==='Enter')$('#wrt_awcb').click();});
+
+  // Add personal character
+  $('#wrt_apb').off('click').on('click',()=>{
+    const n=$('#wrt_apn').val().trim();if(!n)return;
+    const s=getSettings();
+    if(s.personalRules.some(c=>c.name.toLowerCase()===n.toLowerCase())){showToast(tr('alreadyExists'),'#f59e0b');return;}
+    s.personalRules.push({id:genId(),name:n,keywords:[n],rules:[]});
+    saveSettings();rebuildMetaUI();$('#wrt_apn').val('');collectNames();renderTab();
+  });
+  $('#wrt_apn').off('keydown').on('keydown',e=>{if(e.key==='Enter')$('#wrt_apb').click();});
+
+  // Add relations pair
+  $('#wrt_arb').off('click').on('click',()=>{
+    const c1=$('#wrt_ar1').val().trim(),c2=$('#wrt_ar2').val().trim();
+    if(!c1||!c2){showToast(tr('bothNames'),'#f59e0b');return;}
+    if(c1.toLowerCase()===c2.toLowerCase()){showToast(tr('diffNames'),'#f59e0b');return;}
+    const s=getSettings();
+    if(s.relationshipRules.some(p=>p.char1.toLowerCase()===c1.toLowerCase()&&p.char2.toLowerCase()===c2.toLowerCase())){showToast(tr('alreadyExists'),'#f59e0b');return;}
+    s.relationshipRules.push({id:genId(),char1:c1,char2:c2,keywords:[c1,c2],activationMode:'strict',rules:[]});
+    saveSettings();rebuildMetaUI();$('#wrt_ar1').val('');$('#wrt_ar2').val('');collectNames();renderTab();
+  });
+
+  // Scan buttons
+  $('#wrt_sb_world').off('click').on('click',async function(){await doScan('world',$(this));});
+  $('#wrt_sb_personal').off('click').on('click',async function(){await doScan('personal',$(this));});
+  $('#wrt_sb_relations').off('click').on('click',async function(){await doScan('relations',$(this));});
+
+  // ── Drag-and-drop rule reordering (#10)
+  $tb.off('dragstart.dr').on('dragstart.dr','.wrt-rule-row',function(e){
+    dragSrcRuleId=$(this).data('ruleid');
+    dragSrcCatId =$(this).data('catid');
+    dragSrcTab   =$(this).data('tab');
+    e.originalEvent.dataTransfer.effectAllowed='move';
+    $(this).addClass('wrt-dragging');
+  });
+
+  $tb.off('dragend.dr').on('dragend.dr','.wrt-rule-row',function(){
+    $(this).removeClass('wrt-dragging');
+    $tb.find('.wrt-rule-row').removeClass('wrt-drag-over');
+    dragSrcRuleId=null;dragSrcCatId=null;dragSrcTab=null;
+  });
+
+  $tb.off('dragover.dr').on('dragover.dr','.wrt-rule-row',function(e){
+    e.preventDefault();
+    e.originalEvent.dataTransfer.dropEffect='move';
+    if($(this).data('ruleid')!==dragSrcRuleId){
+      $tb.find('.wrt-rule-row').removeClass('wrt-drag-over');
+      $(this).addClass('wrt-drag-over');
+    }
+  });
+
+  $tb.off('drop.dr').on('drop.dr','.wrt-rule-row',function(e){
+    e.preventDefault();e.stopPropagation();
+    $(this).removeClass('wrt-drag-over');
+    const destRuleId=$(this).data('ruleid');
+    const destCatId =$(this).data('catid');
+    const destTab   =$(this).data('tab');
+    // Only reorder within the same category
+    if(!dragSrcRuleId||destRuleId===dragSrcRuleId)return;
+    if(dragSrcCatId!==destCatId||dragSrcTab!==destTab)return;
+
+    const s=getSettings();
+    let arr;
+    if(destTab==='world')arr=s.worldRules;else if(destTab==='personal')arr=s.personalRules;else arr=s.relationshipRules;
+    const cat=arr.find(c=>c.id===destCatId);if(!cat)return;
+
+    const srcIdx=cat.rules.findIndex(r=>r.id===dragSrcRuleId);
+    const dstIdx=cat.rules.findIndex(r=>r.id===destRuleId);
+    if(srcIdx===-1||dstIdx===-1)return;
+
+    // Splice rule from src position, insert at dest position
+    const[moved]=cat.rules.splice(srcIdx,1);
+    cat.rules.splice(dstIdx,0,moved);
+    saveSettings();updatePrompts();renderTab();
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 28 · ST EVENTS + BOOT
+// ══════════════════════════════════════════════════════════════════
+
+function bindSillyTavernEvents(){
+  const{eventSource:es,event_types:et}=getCtx();
+  es.on(et.APP_READY,async()=>{
+    buildSettingsPanel();
+    await updatePrompts();
+    if(getSettings().useVectors)checkVectors();
+  });
+  es.on(et.CHAT_CHANGED,async()=>{
+    collapsedCats={};searchQuery='';vectorActivated=new Set();
+    collectNames();rebuildUI();await updatePrompts();if(isModalOpen())renderTab();
+  });
+  es.on(et.MESSAGE_RECEIVED,async()=>{
+    promptDirty=true;await updatePrompts();
+    if(getSettings().useVectors&&vectorsAvailable)scheduleVectors();
+  });
+  if(et.GENERATION_ENDED)es.on(et.GENERATION_ENDED,async()=>{promptDirty=true;await updatePrompts();});
+  $(document).on('keydown.wrt',e=>{
+    if(e.altKey&&e.key.toLowerCase()==='r'){e.preventDefault();if(isModalOpen())closeModal();else openModal();}
+  });
+}
+
+jQuery(()=>{
+  try{bindSillyTavernEvents();console.log('[World Rules Tracker v3.0] ✦ loaded');}
+  catch(e){console.error('[WRT]',e);}
+});
+
 })();
